@@ -113,7 +113,7 @@ Trigger: ${TRIGGER_CONTEXT}
 Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 Branch for changes: ${BRANCH_NAME}
 Label for issues/PRs: ${LABEL_PREFIX}:${MATE_NAME}
-$([ -n "$EXISTING_ISSUE" ] && echo "Existing open issue: #${EXISTING_ISSUE} — update it instead of creating a new one" || echo "No existing open issue — create one if needed")
+$([ -n "$EXISTING_ISSUE" ] && echo "Existing open issue: #${EXISTING_ISSUE} — do NOT create a new issue. Reference this issue in your PR with 'Fixes #${EXISTING_ISSUE}'. Focus on creating the PR with fixes." || echo "No existing open issue — create one if needed, then create a PR with fixes.")
 
 ## Deny Rules
 
