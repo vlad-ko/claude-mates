@@ -276,6 +276,10 @@ except:
   fi
 
   # Step 2: Create branch, commit, push
+  # Configure git identity for CI (GitHub Actions runners have no default identity)
+  git config user.name "Claude Mates [bot]"
+  git config user.email "claude-mates[bot]@users.noreply.github.com"
+
   echo "Creating branch: ${BRANCH_NAME}"
   git checkout -b "${BRANCH_NAME}" origin/main 2>/dev/null || git checkout -b "${BRANCH_NAME}"
 
