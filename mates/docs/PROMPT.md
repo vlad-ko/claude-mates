@@ -56,42 +56,22 @@ Create a GitHub issue titled `[claude-mate:docs] Documentation update needed —
 
 If the Context section says an existing open issue already exists, **skip issue creation** and reference that issue number in your PR instead.
 
-**Step 2: ALWAYS attempt to open a PR with fixes.**
+**Step 2: EDIT the files directly to fix findings.**
 
-This is the default behavior — not the exception. Most documentation fixes are mechanical:
-- Updating counts, lists, and references
-- Adding a new item to an existing list/table
-- Fixing broken file paths or method names
-- Moving superseded docs to archive with a header
-- Adding a brief description of a new feature to an existing doc section
-
-**Auto-fixable** (create branch, edit files, open PR):
+The framework will detect your changes and handle the git/PR mechanics. Most documentation fixes are mechanical — just make the edit:
 - Updating a number (e.g., "6 workflows" → "7 workflows")
 - Adding an item to a list or table
 - Fixing references to renamed/moved files
 - Removing references to deleted files
 - Moving a file to `docs/archive/` with an archival header
-- Adding a short paragraph describing a new feature in the appropriate doc section
+- Adding a short paragraph describing a new feature in an existing doc section
 
-**Issue-only** (do NOT attempt to fix):
+**Do NOT attempt to fix** (leave for the issue description):
 - Writing entirely new documentation files from scratch
 - Rewriting existing explanations for clarity
 - Architectural decisions about what should or shouldn't be documented
-- Changes that require understanding business logic you don't have context for
 
-The PR must:
-- Reference the issue (`Fixes #NNN` in the PR body)
-- Be on a **fresh branch from the latest main** — run `git checkout -b <branch-name> origin/main` first
-- Follow repo conventions:
-  - Commit message: `docs: <what changed> [claude-mate:docs]`
-  - PR title: `[claude-mate:docs] <brief description>`
-  - PR body: list of changes with references to the issue
-- The PR goes through the repo's normal CI pipeline (Bug Bot, tests, branch protection)
-- **NEVER merge the PR** — leave it for human review
-
-**Step 3: If ALL findings require human judgment, create the issue only.**
-
-Only skip the PR if NONE of the findings are auto-fixable.
+**Key: If you can fix it by editing the file, DO IT.** The framework creates the branch, commit, and PR automatically from your edits.
 
 ### If everything looks good:
 
@@ -109,12 +89,13 @@ Action: [none | issue_only | issue_and_pr]
 
 ## Rules
 
-- **ALWAYS create an issue before creating a PR** — never a PR without an issue
-- **NEVER merge PRs** — leave for human approval
-- **ALWAYS branch from the latest main** — never reuse old branches
+- **Your job is to ANALYZE and EDIT files** — the framework handles git, issues, and PRs
+- **Do NOT run git commands** — you don't have access to them
+- **Do NOT run gh commands** — the framework creates issues and PRs from your edits
+- **ALWAYS make the edits** to fix straightforward findings — don't just describe them
 - Focus on accuracy, not style
 - Do NOT rewrite documentation for stylistic preferences
 - Do NOT add documentation that wasn't there before (that's the developer's job)
 - Do NOT modify code files — only documentation files
 - Do NOT touch docs/archive/ except to move files INTO it
-- Keep PR descriptions concise — list what changed and why
+- If you can fix it by editing the file, DO IT — the framework will detect your changes and create the PR
