@@ -1,0 +1,64 @@
+# Reusable workflow — called by individual mate workflows
+# Do NOT trigger this directly. Use mate-docs.yml, mate-security.yml, etc.
+
+name: Run Mate
+
+on:
+  workflow_call:
+    inputs:
+      mate:
+        description: 'Which mate to run'
+        required: true
+        type: string
+      mates_root:
+        description: 'Path to the claude-mates framework (. for self, path for external)'
+        required: false
+        type: string
+        default: '.'
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Skip mate's own commits (infinite loop prevention)
+    if: >-
+      !contains(github.event.head_commit.message || '', '[claude-mate') &&
+      !contains(github.event.head_commit.message || '', 'claude-mate/')
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      # Pin CLI version for supply chain security
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code@2.1.97
+
+      - name: Run mate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATE_NAME: ${{ inputs.mate }}
+          CONFIG_PATH: .claude-mates.yml
+          TRIGGER_CONTEXT: '{"event":"${{ github.event_name }}","sha":"${{ github.sha }}"}'
+          MATES_ROOT: ${{ inputs.mates_root }}
+        run: bash ${{ inputs.mates_root }}/runner.sh "${{ inputs.mate }}" "${{ inputs.mates_root }}/mates/${{ inputs.mate }}" ".claude-mates.yml"
+
+      - name: Upload run summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mate-${{ inputs.mate }}-${{ github.run_number }}
+          path: /tmp/mate-*-summary.json
+          retention-days: 30
+          if-no-files-found: ignore

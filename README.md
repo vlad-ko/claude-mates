@@ -37,9 +37,19 @@ gh secret set CLAUDE_MATES_API_KEY --repo your-org/your-repo
 # Only needed if you want mates to create PRs with a custom identity
 ```
 
-### 2. Add the workflow
+### 2. Add mate workflows
 
-Copy `examples/claude-mates.yml` to `.github/workflows/claude-mates.yml` in your repo.
+Copy only the mates you want from `examples/` to `.github/workflows/` in your repo:
+
+```bash
+# Just docs mate
+cp examples/mate-docs.yml .github/workflows/
+
+# Or all mates
+cp examples/mate-*.yml .github/workflows/
+```
+
+Each mate is a separate workflow — independent triggers, logs, and concurrency.
 
 ### 3. Add project config
 
@@ -76,7 +86,7 @@ labels:
 ### 4. Run manually (first time)
 
 ```bash
-gh workflow run claude-mates.yml -f mate=docs
+gh workflow run mate-docs.yml
 ```
 
 ## How It Works
