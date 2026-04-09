@@ -122,14 +122,62 @@ ${DENY_RULES}
 - Max 1 PR per run
 - Max 1 issue per run"
 
+# Read skills from project config (skills the mate should invoke via /skill-name)
+SKILLS_NOTE=""
+if [ -f "$CONFIG_PATH" ]; then
+  SKILLS_LIST=$(python3 -c "
+import yaml
+with open('$CONFIG_PATH') as f:
+    config = yaml.safe_load(f)
+mate_config = config.get('mates', {}).get('$MATE_NAME', {})
+skills = mate_config.get('skills', [])
+if skills:
+    print('\n'.join(f'- {s}' for s in skills))
+" 2>/dev/null || echo "")
+
+  if [ -n "$SKILLS_LIST" ]; then
+    SKILLS_NOTE="
+## Available Skills
+
+The following project skills are available. Use them if relevant:
+${SKILLS_LIST}
+"
+    FULL_PROMPT="${FULL_PROMPT}${SKILLS_NOTE}"
+  fi
+fi
+
+# Read scope exclusions from project config
+EXCLUSIONS=""
+if [ -f "$CONFIG_PATH" ]; then
+  EXCLUSIONS=$(python3 -c "
+import yaml
+with open('$CONFIG_PATH') as f:
+    config = yaml.safe_load(f)
+mate_config = config.get('mates', {}).get('$MATE_NAME', {})
+excludes = mate_config.get('exclude', [])
+if excludes:
+    print('\n'.join(f'- {e}' for e in excludes))
+" 2>/dev/null || echo "")
+
+  if [ -n "$EXCLUSIONS" ]; then
+    FULL_PROMPT="${FULL_PROMPT}
+
+## Excluded Paths (do not scan or modify)
+
+${EXCLUSIONS}"
+  fi
+fi
+
 # Run Claude Code CLI
+# NOTE: Do NOT use --bare — we want Claude to read the target repo's CLAUDE.md
+# and .claude/skills/ so project conventions are automatically enforced.
 echo ""
 echo "=== Executing Claude Code ==="
 START_TIME=$(date +%s)
 
 claude -p "$FULL_PROMPT" \
   --model "$MODEL_ID" \
-  --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git diff *),Bash(git log *),Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Bash(git push *),Bash(gh pr *),Bash(gh issue *),Bash(wc *),Bash(find *)" \
+  --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git diff *),Bash(git log *),Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Bash(git push *),Bash(gh pr *),Bash(gh issue *),Bash(wc *),Bash(find *),Bash(mv *)" \
   --permission-mode acceptEdits \
   --max-turns "$MAX_TURNS" \
   --output-format json > "/tmp/mate-${MATE_NAME}-output.json" 2>&1 || true
