@@ -1,0 +1,39 @@
+name: 'Claude Mates'
+description: 'Run autonomous maintenance agents powered by Claude Code'
+inputs:
+  mate:
+    description: 'Which mate to run (docs, security, dead-code, tests, logic, or all)'
+    required: true
+    default: 'all'
+  anthropic_api_key:
+    description: 'Anthropic API key for Claude Code'
+    required: true
+  github_token:
+    description: 'GitHub token for creating branches/PRs/issues'
+    required: true
+  config_path:
+    description: 'Path to .claude-mates.yml in the target repo'
+    required: false
+    default: '.claude-mates.yml'
+  trigger_context:
+    description: 'JSON context about what triggered this run (PR number, commit SHA, etc.)'
+    required: false
+    default: '{}'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Claude Code
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code
+
+    - name: Run dispatcher
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        MATE_NAME: ${{ inputs.mate }}
+        CONFIG_PATH: ${{ inputs.config_path }}
+        TRIGGER_CONTEXT: ${{ inputs.trigger_context }}
+        MATES_ROOT: ${{ github.action_path }}
+      run: bash ${{ github.action_path }}/dispatcher.sh
