@@ -1,0 +1,11 @@
+# Protect critical files — require owner approval for changes
+# Workflow files (API key access, permissions)
+.github/ @vlad-ko
+
+# Framework core (runs arbitrary code from mate prompts)
+runner.sh @vlad-ko
+dispatcher.sh @vlad-ko
+action.yml @vlad-ko
+
+# Config (controls which mates run, model selection, cost)
+.claude-mates.yml @vlad-ko

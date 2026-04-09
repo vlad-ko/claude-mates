@@ -1,0 +1,22 @@
+# Claude Mate: Security
+# Runs on merge to main
+
+name: "Mate: Security"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: mate-security
+  cancel-in-progress: false
+
+jobs:
+  security:
+    uses: ./.github/workflows/_run-mate.yml
+    with:
+      mate: "security"
+      mates_root: "."
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_MATES_API_KEY }}

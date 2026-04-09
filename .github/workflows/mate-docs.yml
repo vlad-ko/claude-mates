@@ -1,0 +1,22 @@
+# Claude Mate: Docs
+# Runs on merge to main
+
+name: "Mate: Docs"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: mate-docs
+  cancel-in-progress: false
+
+jobs:
+  docs:
+    uses: ./.github/workflows/_run-mate.yml
+    with:
+      mate: "docs"
+      mates_root: "."
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_MATES_API_KEY }}

@@ -197,6 +197,14 @@ echo "=== Phase 1 Complete (${DURATION}s) ==="
 echo ""
 echo "=== Phase 2: Git & GitHub Operations ==="
 
+# Track outcomes for the summary
+OUTCOME="none"
+ISSUE_NUM=""
+PR_NUM=""
+ISSUE_URL_OUT=""
+PR_URL_OUT=""
+FILES_CHANGED_COUNT=0
+
 # Check if Claude made any file changes
 CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
 UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
@@ -225,16 +233,18 @@ except:
       --body "$CLAUDE_OUTPUT" 2>/dev/null || echo "")
 
     if [ -n "$ISSUE_URL" ]; then
-      echo "Created issue: $ISSUE_URL"
-      EXISTING_ISSUE=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+      ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+      ISSUE_URL_OUT="$ISSUE_URL"
+      EXISTING_ISSUE="$ISSUE_NUM"
+      OUTCOME="issue_created"
     else
       echo "::warning::Failed to create issue"
+      OUTCOME="error_issue_creation"
     fi
   else
-    echo "Existing issue #${EXISTING_ISSUE} covers these findings."
+    ISSUE_NUM="$EXISTING_ISSUE"
+    OUTCOME="no_changes_existing_issue"
   fi
-
-  echo "outcome=issue_only"
 else
   echo "File changes detected:"
   echo "$CHANGED_FILES"
@@ -259,8 +269,9 @@ except:
       --body "$CLAUDE_OUTPUT" 2>/dev/null || echo "")
 
     if [ -n "$ISSUE_URL" ]; then
-      EXISTING_ISSUE=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
-      echo "Created issue #${EXISTING_ISSUE}: $ISSUE_URL"
+      ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+      ISSUE_URL_OUT="$ISSUE_URL"
+      EXISTING_ISSUE="$ISSUE_NUM"
     fi
   fi
 
@@ -297,48 +308,120 @@ $(echo "$CHANGED_FILES" "$UNTRACKED_FILES" | sed '/^$/d' | sed 's/^/- /')
     --label "${LABEL_PREFIX}:${MATE_NAME}" 2>/dev/null || echo "")
 
   if [ -n "$PR_URL" ]; then
-    echo "Created PR: $PR_URL"
-    echo "outcome=issue_and_pr"
+    PR_NUM=$(echo "$PR_URL" | grep -o '[0-9]*$')
+    PR_URL_OUT="$PR_URL"
+    FILES_CHANGED_COUNT=$(echo "$CHANGED_FILES" "$UNTRACKED_FILES" | sed '/^$/d' | wc -l | tr -d ' ')
+    OUTCOME="issue_and_pr"
   else
     echo "::warning::Failed to create PR"
-    echo "outcome=issue_only"
+    OUTCOME="issue_only_pr_failed"
   fi
 fi
 
-echo ""
-echo "=== Phase 2 Complete ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# SUMMARY — Clear, reviewable output
+# ═══════════════════════════════════════════════════════════════════════════
 
-# Parse output for cost info if available
+# Parse token usage
+TOKENS_IN=0
+TOKENS_OUT=0
 if [ -f "/tmp/mate-${MATE_NAME}-output.json" ]; then
   TOKENS_IN=$(python3 -c "
 import json
-with open('/tmp/mate-${MATE_NAME}-output.json') as f:
-    data = json.load(f)
-print(data.get('usage', {}).get('input_tokens', 0))
+try:
+    with open('/tmp/mate-${MATE_NAME}-output.json') as f:
+        data = json.load(f)
+    print(data.get('usage', {}).get('input_tokens', 0))
+except: print(0)
 " 2>/dev/null || echo "0")
 
   TOKENS_OUT=$(python3 -c "
 import json
-with open('/tmp/mate-${MATE_NAME}-output.json') as f:
-    data = json.load(f)
-print(data.get('usage', {}).get('output_tokens', 0))
+try:
+    with open('/tmp/mate-${MATE_NAME}-output.json') as f:
+        data = json.load(f)
+    print(data.get('usage', {}).get('output_tokens', 0))
+except: print(0)
 " 2>/dev/null || echo "0")
+fi
 
-  echo "Tokens in: $TOKENS_IN"
-  echo "Tokens out: $TOKENS_OUT"
+# Print summary to CI logs
+echo ""
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║              CLAUDE MATE RUN SUMMARY                    ║"
+echo "╠══════════════════════════════════════════════════════════╣"
+echo "║  Mate:     ${MATE_NAME}"
+echo "║  Model:    ${MODEL_ID}"
+echo "║  Duration: ${DURATION}s"
+echo "║  Tokens:   ${TOKENS_IN} in / ${TOKENS_OUT} out"
+echo "╠══════════════════════════════════════════════════════════╣"
 
-  # Create summary artifact
-  cat > "/tmp/mate-${MATE_NAME}-summary.json" << JSONEOF
+case "$OUTCOME" in
+  issue_and_pr)
+    echo "║  RESULT:   Issue + PR created"
+    echo "║  Issue:    #${ISSUE_NUM} ${ISSUE_URL_OUT}"
+    echo "║  PR:       #${PR_NUM} ${PR_URL_OUT}"
+    echo "║  Files:    ${FILES_CHANGED_COUNT} changed"
+    ;;
+  issue_created)
+    echo "║  RESULT:   Issue created (no file changes to PR)"
+    echo "║  Issue:    #${ISSUE_NUM} ${ISSUE_URL_OUT}"
+    echo "║  PR:       Not created — no file edits by Claude"
+    ;;
+  no_changes_existing_issue)
+    echo "║  RESULT:   No new findings"
+    echo "║  Issue:    #${ISSUE_NUM} (existing, still open)"
+    echo "║  PR:       Not created — no file edits by Claude"
+    ;;
+  issue_only_pr_failed)
+    echo "║  RESULT:   Issue created, PR creation failed"
+    echo "║  Issue:    #${ISSUE_NUM}"
+    echo "║  PR:       FAILED — check logs above"
+    ;;
+  error_issue_creation)
+    echo "║  RESULT:   ERROR — failed to create issue"
+    echo "║  Issue:    FAILED"
+    echo "║  PR:       Not attempted"
+    ;;
+  none)
+    echo "║  RESULT:   Clean — no findings, no changes needed"
+    echo "║  Issue:    Not created"
+    echo "║  PR:       Not created"
+    ;;
+esac
+
+echo "╚══════════════════════════════════════════════════════════╝"
+
+# Write to GitHub Actions Job Summary (the markdown panel in the UI)
+if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+  cat >> "$GITHUB_STEP_SUMMARY" << MDEOF
+### Claude Mate: \`${MATE_NAME}\`
+
+| | |
+|---|---|
+| **Model** | ${MODEL_ID} |
+| **Duration** | ${DURATION}s |
+| **Tokens** | ${TOKENS_IN} in / ${TOKENS_OUT} out |
+| **Result** | ${OUTCOME} |
+$([ -n "$ISSUE_NUM" ] && echo "| **Issue** | #${ISSUE_NUM} |")
+$([ -n "$PR_NUM" ] && echo "| **PR** | #${PR_NUM} |")
+$([ "$FILES_CHANGED_COUNT" -gt 0 ] 2>/dev/null && echo "| **Files changed** | ${FILES_CHANGED_COUNT} |")
+MDEOF
+fi
+
+# Create summary artifact
+cat > "/tmp/mate-${MATE_NAME}-summary.json" << JSONEOF
 {
   "mate": "${MATE_NAME}",
   "model": "${MODEL_ID}",
   "tokens_in": ${TOKENS_IN},
   "tokens_out": ${TOKENS_OUT},
   "duration_seconds": ${DURATION},
+  "outcome": "${OUTCOME}",
+  "issue_number": "${ISSUE_NUM}",
+  "pr_number": "${PR_NUM}",
+  "files_changed": ${FILES_CHANGED_COUNT},
   "branch": "${BRANCH_NAME}",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSONEOF
-
-  echo "Summary: /tmp/mate-${MATE_NAME}-summary.json"
-fi
