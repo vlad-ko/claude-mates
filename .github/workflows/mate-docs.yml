@@ -12,6 +12,12 @@ concurrency:
   group: mate-docs
   cancel-in-progress: false
 
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
 jobs:
   docs:
     uses: ./.github/workflows/_run-mate.yml
