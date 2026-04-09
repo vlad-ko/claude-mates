@@ -11,27 +11,40 @@ exclude:
 mates:
   docs:
     enabled: true
+    model: haiku
+    max_turns: 10  # Small repo — 10 turns is plenty
     schedule: post-merge
 
   security:
     enabled: true
+    model: haiku  # Haiku for dogfooding (Sonnet for production repos)
+    max_turns: 10
     schedule: post-merge
 
   dead-code:
     enabled: true
+    model: haiku
+    max_turns: 10
     schedule: nightly
 
   tests:
     enabled: true
+    model: haiku
+    max_turns: 10
     schedule: nightly
 
   logic:
     enabled: true
+    model: haiku
+    max_turns: 10
     schedule: nightly
 
 deny:
-  - NEVER merge any PR
-  - NEVER push directly to main
-  - NEVER modify .env files
-  - NEVER delete or modify runner.sh, dispatcher.sh, or action.yml without explicit approval
+  - NEVER merge any PR — always require human approval
+  - NEVER create a PR without creating a GitHub issue first
+  - NEVER push directly to main — always use a feature branch and PR
+  - NEVER modify .env files or secrets
+  - NEVER modify .github/workflows/ — CODEOWNERS protects these
+  - NEVER modify runner.sh, dispatcher.sh, or action.yml — framework core
   - NEVER modify another mate's PROMPT.md or mate.yml
+  - NEVER modify CODEOWNERS or SECURITY.md
