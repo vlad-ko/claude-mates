@@ -90,12 +90,14 @@ print(config.get('labels', {}).get('prefix', 'claude-mate'))
 " 2>/dev/null || echo "claude-mate")
 fi
 
-BRANCH_NAME="${LABEL_PREFIX}/${MATE_NAME}/$(date +%Y-%m-%d)"
+BRANCH_NAME="${LABEL_PREFIX}/${MATE_NAME}/$(date +%Y-%m-%d-%H%M)"
 
 # Check if a PR already exists for this mate today (prevent duplicates)
-EXISTING_PR=$(gh pr list --search "head:${BRANCH_NAME}" --json number --jq '.[0].number' 2>/dev/null || echo "")
+# Use date-only prefix to catch any run from today
+BRANCH_PREFIX="${LABEL_PREFIX}/${MATE_NAME}/$(date +%Y-%m-%d)"
+EXISTING_PR=$(gh pr list --search "head:${BRANCH_PREFIX}" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
 if [ -n "$EXISTING_PR" ]; then
-  echo "PR #$EXISTING_PR already exists for $BRANCH_NAME — skipping"
+  echo "Open PR #$EXISTING_PR already exists for ${BRANCH_PREFIX}* — skipping"
   exit 0
 fi
 

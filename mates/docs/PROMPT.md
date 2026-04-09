@@ -43,22 +43,32 @@ Check the project's `.claude-mates.yml` for scope overrides. Default scope:
 
 ### If you find documentation issues:
 
-1. Create a GitHub issue titled `[claude-mate:docs] Documentation update needed — <date>` with your findings organized by severity:
-   - **Incorrect**: Docs that state something factually wrong
-   - **Stale**: Docs that reference things that have changed
-   - **Missing**: Code changes without corresponding doc updates
-   - **Archive candidates**: Current docs that describe superseded architecture
+**Step 1: ALWAYS create a GitHub issue first.**
 
-2. If the fixes are straightforward (typos, path updates, removing references to deleted files, archiving superseded docs):
-   - Create a branch using the branch name from the Context section
-   - Make the fixes directly
-   - For archival: move the file to `docs/archive/`, add the header, update any references
-   - Commit with message: `docs: Fix documentation staleness [claude-mate:docs]`
-   - Open a PR referencing the issue
+Create a GitHub issue titled `[claude-mate:docs] Documentation update needed — <date>` with:
+- Label: the label from the Context section (e.g., `claude-mate:docs`)
+- Findings organized by severity:
+  - **Incorrect**: Docs that state something factually wrong
+  - **Stale**: Docs that reference things that have changed
+  - **Missing**: Code changes without corresponding doc updates
+  - **Archive candidates**: Current docs that describe superseded architecture
+- For each finding: the file path, what's wrong, and what the fix should be
 
-3. If the fixes require human judgment (rewriting explanations, deciding what to document):
-   - Create the issue only, with clear descriptions of what needs attention
-   - Do NOT make changes
+**Step 2: If fixes are straightforward, also open a PR.**
+
+Only AFTER the issue is created. The PR must:
+- Reference the issue (`Fixes #NNN` in the PR body)
+- Be on a **fresh branch from the latest main** (use the branch name from Context section)
+- Follow repo conventions:
+  - Commit message: `docs: Fix documentation staleness [claude-mate:docs]`
+  - PR title: `[claude-mate:docs] <brief description>`
+  - PR body: list of changes with references to the issue
+- The PR goes through the repo's normal CI pipeline (Bug Bot, tests, branch protection)
+- **NEVER merge the PR** — leave it for human review
+
+**Step 3: If fixes require human judgment, create the issue only.**
+
+For changes that need human decision-making (rewriting explanations, deciding what to document, architectural choices), create the issue with clear descriptions but do NOT make changes or open a PR.
 
 ### If everything looks good:
 
@@ -71,11 +81,14 @@ Always start your analysis with a brief summary:
 Files changed in last merge: N
 Documentation files checked: N
 Issues found: N (X incorrect, Y stale, Z missing, W archive candidates)
-Action: [none | issue_created | pr_created]
+Action: [none | issue_only | issue_and_pr]
 ```
 
 ## Rules
 
+- **ALWAYS create an issue before creating a PR** — never a PR without an issue
+- **NEVER merge PRs** — leave for human approval
+- **ALWAYS branch from the latest main** — never reuse old branches
 - Focus on accuracy, not style
 - Do NOT rewrite documentation for stylistic preferences
 - Do NOT add documentation that wasn't there before (that's the developer's job)
