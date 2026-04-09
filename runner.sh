@@ -210,25 +210,35 @@ CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
 UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
 
 if [ -z "$CHANGED_FILES" ] && [ -z "$UNTRACKED_FILES" ]; then
-  echo "No file changes detected — Claude found nothing to fix or only reported findings."
+  echo "No file changes detected by Claude."
 
-  # If no existing issue, Claude should have created one via the prompt.
-  # But since we removed gh from Claude's tools, we need to handle issue creation here too.
-  if [ -z "$EXISTING_ISSUE" ]; then
-    echo "Creating issue from Claude's analysis..."
-    # Extract Claude's output text for the issue body
-    CLAUDE_OUTPUT=$(python3 -c "
+  # Extract Claude's analysis output
+  CLAUDE_OUTPUT=$(python3 -c "
 import json
 try:
     with open('/tmp/mate-${MATE_NAME}-output.json') as f:
         data = json.load(f)
-    print(data.get('result', data.get('content', 'No analysis output available.')))
+    result = data.get('result', data.get('content', ''))
+    print(result if result else '')
 except:
-    print('Analysis completed but output could not be parsed.')
-" 2>/dev/null || echo "Analysis completed. Check workflow run for details.")
+    print('')
+" 2>/dev/null || echo "")
 
+  # Determine if Claude found anything worth reporting
+  if [ -z "$CLAUDE_OUTPUT" ] || echo "$CLAUDE_OUTPUT" | grep -qiE "no (issues|findings|changes|problems)|everything looks good|clean|nothing to"; then
+    # Claude found nothing — this is a CLEAN run, not a failure
+    echo "Claude found no issues — codebase is clean for this mate's scope."
+    OUTCOME="clean"
+  elif [ -n "$EXISTING_ISSUE" ]; then
+    # Claude had findings but made no edits, and an issue already exists
+    echo "Claude reported findings but made no file edits. Existing issue #${EXISTING_ISSUE} covers these."
+    ISSUE_NUM="$EXISTING_ISSUE"
+    OUTCOME="no_changes_existing_issue"
+  else
+    # Claude had findings but made no edits — create an issue with the analysis
+    echo "Claude reported findings but made no file edits. Creating issue..."
     ISSUE_URL=$(gh issue create \
-      --title "[${LABEL_PREFIX}:${MATE_NAME}] Documentation review — $(date +%Y-%m-%d)" \
+      --title "[${LABEL_PREFIX}:${MATE_NAME}] Review findings — $(date +%Y-%m-%d)" \
       --label "${LABEL_PREFIX}:${MATE_NAME}" \
       --body "$CLAUDE_OUTPUT" 2>/dev/null || echo "")
 
@@ -238,12 +248,9 @@ except:
       EXISTING_ISSUE="$ISSUE_NUM"
       OUTCOME="issue_created"
     else
-      echo "::warning::Failed to create issue"
-      OUTCOME="error_issue_creation"
+      echo "Claude reported findings but issue creation was skipped (no label configured or API error)."
+      OUTCOME="findings_no_issue"
     fi
-  else
-    ISSUE_NUM="$EXISTING_ISSUE"
-    OUTCOME="no_changes_existing_issue"
   fi
 else
   echo "File changes detected:"
@@ -368,24 +375,29 @@ case "$OUTCOME" in
     echo "║  Files:    ${FILES_CHANGED_COUNT} changed"
     ;;
   issue_created)
-    echo "║  RESULT:   Issue created (no file changes to PR)"
+    echo "║  RESULT:   Issue created (findings need human review)"
     echo "║  Issue:    #${ISSUE_NUM} ${ISSUE_URL_OUT}"
-    echo "║  PR:       Not created — no file edits by Claude"
+    echo "║  PR:       Not created — Claude reported findings but didn't edit files"
     ;;
   no_changes_existing_issue)
-    echo "║  RESULT:   No new findings"
-    echo "║  Issue:    #${ISSUE_NUM} (existing, still open)"
-    echo "║  PR:       Not created — no file edits by Claude"
+    echo "║  RESULT:   Existing issue still open, no new edits"
+    echo "║  Issue:    #${ISSUE_NUM} (existing)"
+    echo "║  PR:       Not created — no new file edits"
+    ;;
+  findings_no_issue)
+    echo "║  RESULT:   Findings reported (issue creation skipped)"
+    echo "║  Issue:    Not created — check Claude output above"
+    echo "║  PR:       Not created"
     ;;
   issue_only_pr_failed)
-    echo "║  RESULT:   Issue created, PR creation failed"
+    echo "║  RESULT:   Issue created, but PR creation failed"
     echo "║  Issue:    #${ISSUE_NUM}"
-    echo "║  PR:       FAILED — check logs above"
+    echo "║  PR:       ERROR — check logs above"
     ;;
-  error_issue_creation)
-    echo "║  RESULT:   ERROR — failed to create issue"
-    echo "║  Issue:    FAILED"
-    echo "║  PR:       Not attempted"
+  clean)
+    echo "║  RESULT:   Clean — no findings, codebase looks good"
+    echo "║  Issue:    Not needed"
+    echo "║  PR:       Not needed"
     ;;
   none)
     echo "║  RESULT:   Clean — no findings, no changes needed"
