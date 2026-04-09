@@ -15,9 +15,17 @@ on:
         required: false
         type: string
         default: '.'
+      wizard_skill:
+        description: 'GitHub repo containing the wizard skill (owner/repo format, or empty to skip)'
+        required: false
+        type: string
+        default: 'vlad-ko/claude-wizard'
     secrets:
       ANTHROPIC_API_KEY:
         required: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   run:
@@ -37,6 +45,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
+
+      # Load wizard skill so Claude Code uses architect-level methodology
+      # Always grabs latest main — the skill is read-only context, not executed code
+      - name: Load wizard skill
+        if: inputs.wizard_skill != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.wizard_skill }}
+          path: .wizard-skill-tmp
+          sparse-checkout: skill
+
+      - name: Install wizard skill
+        if: inputs.wizard_skill != ''
+        run: |
+          mkdir -p .claude/skills/wizard
+          cp .wizard-skill-tmp/skill/* .claude/skills/wizard/
+          rm -rf .wizard-skill-tmp
+          echo "Wizard skill loaded from ${{ inputs.wizard_skill }}"
 
       # Pin CLI version for supply chain security
       - name: Install Claude Code CLI
