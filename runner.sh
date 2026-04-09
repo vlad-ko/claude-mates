@@ -170,16 +170,17 @@ ${EXCLUSIONS}"
   fi
 fi
 
-# Run Claude Code CLI
-# NOTE: Do NOT use --bare — we want Claude to read the target repo's CLAUDE.md
-# and .claude/skills/ so project conventions are automatically enforced.
+# ═══════════════════════════════════════════════════════════════════════════
+# PHASE 1: Claude analyzes and edits files (no git, no gh — just file ops)
+# ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "=== Executing Claude Code ==="
+echo "=== Phase 1: Claude Code Analysis & Edits ==="
 START_TIME=$(date +%s)
 
+# Claude gets file tools ONLY — no git/gh. Shell handles all git mechanics.
 claude -p "$FULL_PROMPT" \
   --model "$MODEL_ID" \
-  --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git diff *),Bash(git log *),Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Bash(git push *),Bash(gh pr *),Bash(gh issue *),Bash(wc *),Bash(find *),Bash(mv *)" \
+  --allowedTools "Read,Glob,Grep,Edit,Write,Bash(find *),Bash(wc *),Bash(mv *),Bash(cat *),Bash(head *),Bash(tail *)" \
   --permission-mode acceptEdits \
   --max-turns "$MAX_TURNS" \
   --output-format json > "/tmp/mate-${MATE_NAME}-output.json" 2>&1 || true
@@ -187,10 +188,125 @@ claude -p "$FULL_PROMPT" \
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
 
-# Extract results
 echo ""
-echo "=== Mate Run Complete ==="
-echo "Duration: ${DURATION}s"
+echo "=== Phase 1 Complete (${DURATION}s) ==="
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PHASE 2: Shell handles git mechanics deterministically
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== Phase 2: Git & GitHub Operations ==="
+
+# Check if Claude made any file changes
+CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
+UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+
+if [ -z "$CHANGED_FILES" ] && [ -z "$UNTRACKED_FILES" ]; then
+  echo "No file changes detected — Claude found nothing to fix or only reported findings."
+
+  # If no existing issue, Claude should have created one via the prompt.
+  # But since we removed gh from Claude's tools, we need to handle issue creation here too.
+  if [ -z "$EXISTING_ISSUE" ]; then
+    echo "Creating issue from Claude's analysis..."
+    # Extract Claude's output text for the issue body
+    CLAUDE_OUTPUT=$(python3 -c "
+import json
+try:
+    with open('/tmp/mate-${MATE_NAME}-output.json') as f:
+        data = json.load(f)
+    print(data.get('result', data.get('content', 'No analysis output available.')))
+except:
+    print('Analysis completed but output could not be parsed.')
+" 2>/dev/null || echo "Analysis completed. Check workflow run for details.")
+
+    ISSUE_URL=$(gh issue create \
+      --title "[${LABEL_PREFIX}:${MATE_NAME}] Documentation review — $(date +%Y-%m-%d)" \
+      --label "${LABEL_PREFIX}:${MATE_NAME}" \
+      --body "$CLAUDE_OUTPUT" 2>/dev/null || echo "")
+
+    if [ -n "$ISSUE_URL" ]; then
+      echo "Created issue: $ISSUE_URL"
+      EXISTING_ISSUE=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+    else
+      echo "::warning::Failed to create issue"
+    fi
+  else
+    echo "Existing issue #${EXISTING_ISSUE} covers these findings."
+  fi
+
+  echo "outcome=issue_only"
+else
+  echo "File changes detected:"
+  echo "$CHANGED_FILES"
+  echo "$UNTRACKED_FILES"
+
+  # Step 1: Create issue if none exists
+  if [ -z "$EXISTING_ISSUE" ]; then
+    echo "Creating issue for findings..."
+    CLAUDE_OUTPUT=$(python3 -c "
+import json
+try:
+    with open('/tmp/mate-${MATE_NAME}-output.json') as f:
+        data = json.load(f)
+    print(data.get('result', data.get('content', 'Documentation fixes applied.')))
+except:
+    print('Documentation fixes applied. See PR for details.')
+" 2>/dev/null || echo "Documentation fixes applied. See PR for details.")
+
+    ISSUE_URL=$(gh issue create \
+      --title "[${LABEL_PREFIX}:${MATE_NAME}] Documentation update needed — $(date +%Y-%m-%d)" \
+      --label "${LABEL_PREFIX}:${MATE_NAME}" \
+      --body "$CLAUDE_OUTPUT" 2>/dev/null || echo "")
+
+    if [ -n "$ISSUE_URL" ]; then
+      EXISTING_ISSUE=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+      echo "Created issue #${EXISTING_ISSUE}: $ISSUE_URL"
+    fi
+  fi
+
+  # Step 2: Create branch, commit, push
+  echo "Creating branch: ${BRANCH_NAME}"
+  git checkout -b "${BRANCH_NAME}" origin/main 2>/dev/null || git checkout -b "${BRANCH_NAME}"
+
+  git add -A
+  git commit -m "docs: Fix documentation findings [${LABEL_PREFIX}:${MATE_NAME}]
+
+Automated fixes by Claude Mates docs reviewer.
+$([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}")"
+
+  git push origin "${BRANCH_NAME}" 2>/dev/null
+
+  # Step 3: Create PR
+  PR_BODY="## Automated Documentation Fixes
+
+Fixes identified and applied by the \`${MATE_NAME}\` Claude Mate.
+
+$([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}" || echo "")
+
+### Changed Files
+$(echo "$CHANGED_FILES" "$UNTRACKED_FILES" | sed '/^$/d' | sed 's/^/- /')
+
+---
+*Generated by [Claude Mates](https://github.com/vlad-ko/claude-mates)*"
+
+  PR_URL=$(gh pr create \
+    --title "[${LABEL_PREFIX}:${MATE_NAME}] Fix documentation findings" \
+    --body "$PR_BODY" \
+    --base main \
+    --head "${BRANCH_NAME}" \
+    --label "${LABEL_PREFIX}:${MATE_NAME}" 2>/dev/null || echo "")
+
+  if [ -n "$PR_URL" ]; then
+    echo "Created PR: $PR_URL"
+    echo "outcome=issue_and_pr"
+  else
+    echo "::warning::Failed to create PR"
+    echo "outcome=issue_only"
+  fi
+fi
+
+echo ""
+echo "=== Phase 2 Complete ==="
 
 # Parse output for cost info if available
 if [ -f "/tmp/mate-${MATE_NAME}-output.json" ]; then
