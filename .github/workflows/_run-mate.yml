@@ -29,10 +29,8 @@ jobs:
       !contains(github.event.head_commit.message || '', '[claude-mate') &&
       !contains(github.event.head_commit.message || '', 'claude-mate/')
 
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
+    # Note: permissions must be declared by the CALLER workflow, not here.
+    # Each mate-*.yml must include the permissions block.
 
     steps:
       - name: Checkout repo
