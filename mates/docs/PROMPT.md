@@ -43,7 +43,7 @@ Check the project's `.claude-mates.yml` for scope overrides. Default scope:
 
 ### If you find documentation issues:
 
-**Step 1: ALWAYS create a GitHub issue first.**
+**Step 1: ALWAYS create a GitHub issue first** (unless one already exists — see Context).
 
 Create a GitHub issue titled `[claude-mate:docs] Documentation update needed — <date>` with:
 - Label: the label from the Context section (e.g., `claude-mate:docs`)
@@ -54,21 +54,44 @@ Create a GitHub issue titled `[claude-mate:docs] Documentation update needed —
   - **Archive candidates**: Current docs that describe superseded architecture
 - For each finding: the file path, what's wrong, and what the fix should be
 
-**Step 2: If fixes are straightforward, also open a PR.**
+If the Context section says an existing open issue already exists, **skip issue creation** and reference that issue number in your PR instead.
 
-Only AFTER the issue is created. The PR must:
+**Step 2: ALWAYS attempt to open a PR with fixes.**
+
+This is the default behavior — not the exception. Most documentation fixes are mechanical:
+- Updating counts, lists, and references
+- Adding a new item to an existing list/table
+- Fixing broken file paths or method names
+- Moving superseded docs to archive with a header
+- Adding a brief description of a new feature to an existing doc section
+
+**Auto-fixable** (create branch, edit files, open PR):
+- Updating a number (e.g., "6 workflows" → "7 workflows")
+- Adding an item to a list or table
+- Fixing references to renamed/moved files
+- Removing references to deleted files
+- Moving a file to `docs/archive/` with an archival header
+- Adding a short paragraph describing a new feature in the appropriate doc section
+
+**Issue-only** (do NOT attempt to fix):
+- Writing entirely new documentation files from scratch
+- Rewriting existing explanations for clarity
+- Architectural decisions about what should or shouldn't be documented
+- Changes that require understanding business logic you don't have context for
+
+The PR must:
 - Reference the issue (`Fixes #NNN` in the PR body)
-- Be on a **fresh branch from the latest main** (use the branch name from Context section)
+- Be on a **fresh branch from the latest main** — run `git checkout -b <branch-name> origin/main` first
 - Follow repo conventions:
-  - Commit message: `docs: Fix documentation staleness [claude-mate:docs]`
+  - Commit message: `docs: <what changed> [claude-mate:docs]`
   - PR title: `[claude-mate:docs] <brief description>`
   - PR body: list of changes with references to the issue
 - The PR goes through the repo's normal CI pipeline (Bug Bot, tests, branch protection)
 - **NEVER merge the PR** — leave it for human review
 
-**Step 3: If fixes require human judgment, create the issue only.**
+**Step 3: If ALL findings require human judgment, create the issue only.**
 
-For changes that need human decision-making (rewriting explanations, deciding what to document, architectural choices), create the issue with clear descriptions but do NOT make changes or open a PR.
+Only skip the PR if NONE of the findings are auto-fixable.
 
 ### If everything looks good:
 
