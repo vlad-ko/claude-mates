@@ -47,7 +47,7 @@ jobs:
       - name: Checkout claude-mates framework
         uses: actions/checkout@v4
         with:
-          repository: vjk/claude-mates  # Change to your fork/org
+          repository: vlad-ko/claude-mates  # Change to your fork/org
           path: .claude-mates-framework
 
       - name: Determine which mate to run
