@@ -1,0 +1,37 @@
+# Claude Mates — Self-dogfooding configuration
+# This project uses its own framework to maintain itself.
+
+labels:
+  prefix: claude-mate
+
+exclude:
+  - .git/
+  - node_modules/
+
+mates:
+  docs:
+    enabled: true
+    schedule: post-merge
+
+  security:
+    enabled: true
+    schedule: post-merge
+
+  dead-code:
+    enabled: true
+    schedule: nightly
+
+  tests:
+    enabled: true
+    schedule: nightly
+
+  logic:
+    enabled: true
+    schedule: nightly
+
+deny:
+  - NEVER merge any PR
+  - NEVER push directly to main
+  - NEVER modify .env files
+  - NEVER delete or modify runner.sh, dispatcher.sh, or action.yml without explicit approval
+  - NEVER modify another mate's PROMPT.md or mate.yml

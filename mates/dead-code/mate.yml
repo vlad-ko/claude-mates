@@ -1,0 +1,5 @@
+name: dead-code
+description: Dead code scanner and remover
+model: haiku
+max_turns: 15
+schedule: nightly

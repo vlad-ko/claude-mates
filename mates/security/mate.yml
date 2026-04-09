@@ -1,0 +1,5 @@
+name: security
+description: Security architecture reviewer
+model: sonnet
+max_turns: 15
+schedule: post-merge

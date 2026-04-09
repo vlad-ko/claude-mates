@@ -1,0 +1,5 @@
+name: tests
+description: Test hygiene reviewer
+model: haiku
+max_turns: 15
+schedule: nightly
