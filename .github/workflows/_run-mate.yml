@@ -24,9 +24,6 @@ on:
       ANTHROPIC_API_KEY:
         required: true
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -42,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 2
 
@@ -50,7 +47,7 @@ jobs:
       # Always grabs latest main — the skill is read-only context, not executed code
       - name: Load wizard skill
         if: inputs.wizard_skill != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ inputs.wizard_skill }}
           path: .wizard-skill-tmp
@@ -80,7 +77,7 @@ jobs:
 
       - name: Upload run summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: mate-${{ inputs.mate }}-${{ github.run_number }}
           path: /tmp/mate-*-summary.json
