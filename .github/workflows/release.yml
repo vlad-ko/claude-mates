@@ -1,0 +1,118 @@
+# Automated release — tags and publishes on merge to main
+# Determines version bump from conventional commit prefixes:
+#   feat: → minor (0.x.0)
+#   fix:/chore:/docs: → patch (0.0.x)
+#
+# Skip by including [skip release] in the merge commit message.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Skip mate commits, merge commits with [skip release], and badge/doc-only fixes
+    if: >-
+      !contains(github.event.head_commit.message, '[skip release]') &&
+      !contains(github.event.head_commit.message, '[claude-mate')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Full history for tag detection
+
+      - name: Get latest tag
+        id: latest
+        run: |
+          LATEST=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || echo "v0.0.0")
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: $LATEST"
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          LATEST="${{ steps.latest.outputs.tag }}"
+          # Get commits since last tag
+          if git rev-parse "$LATEST" >/dev/null 2>&1; then
+            COMMITS=$(git log "${LATEST}..HEAD" --oneline --no-merges)
+          else
+            COMMITS=$(git log --oneline --no-merges -10)
+          fi
+
+          echo "Commits since $LATEST:"
+          echo "$COMMITS"
+
+          # Skip if no non-merge commits
+          if [ -z "$COMMITS" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No new commits — skipping release"
+            exit 0
+          fi
+
+          # Determine bump type from conventional commits
+          if echo "$COMMITS" | grep -qiE "^[a-f0-9]+ feat(\(|:)"; then
+            BUMP="minor"
+          elif echo "$COMMITS" | grep -qiE "^[a-f0-9]+ (fix|chore|docs|refactor|style|perf|test)(\(|:)"; then
+            BUMP="patch"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No conventional commits found — skipping release"
+            exit 0
+          fi
+
+          # Calculate new version
+          MAJOR=$(echo "$LATEST" | sed 's/v//' | cut -d. -f1)
+          MINOR=$(echo "$LATEST" | sed 's/v//' | cut -d. -f2)
+          PATCH=$(echo "$LATEST" | sed 's/v//' | cut -d. -f3)
+
+          case "$BUMP" in
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Version bump: $BUMP ($LATEST → $NEW_TAG)"
+
+      - name: Generate release notes
+        id: notes
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          LATEST="${{ steps.latest.outputs.tag }}"
+          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
+
+          # Build release notes from commits
+          NOTES="## What's Changed\n\n"
+          if git rev-parse "$LATEST" >/dev/null 2>&1; then
+            NOTES+=$(git log "${LATEST}..HEAD" --oneline --no-merges | sed 's/^[a-f0-9]* /- /')
+          else
+            NOTES+=$(git log --oneline --no-merges -10 | sed 's/^[a-f0-9]* /- /')
+          fi
+          NOTES+="\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LATEST}...${NEW_TAG}"
+
+          # Write to file to avoid quoting issues
+          printf "%b" "$NOTES" > /tmp/release-notes.md
+          cat /tmp/release-notes.md
+
+      - name: Create tag and release
+        if: steps.bump.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+          gh release create "$NEW_TAG" \
+            --title "$NEW_TAG" \
+            --notes-file /tmp/release-notes.md
+          echo "Released $NEW_TAG"

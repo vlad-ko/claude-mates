@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.1.1] - 2026-04-11
+
+### Fixed
+- **False-positive issue prevention** — Runner no longer creates GitHub issues for clean runs, API errors, or empty output. Added `CLAUDE_STATUS` classification (ok/clean/error/empty) in Phase 1.5 ([#32], [#33])
+- **Node.js 20 deprecation warning** — Upgraded `actions/upload-artifact` from v5 to v7 (native Node 24 target) ([#21], [#33])
+- **Empty Job Summary on skipped runs** — Early-exit paths now write a "Skipped" message to the Job Summary panel ([#33])
+- **Stale branch cleanup** — Deleted merged feature branch ([#33])
+
+[#33]: https://github.com/vlad-ko/claude-mates/pull/33
+
 ## [0.1.0] - 2026-04-11
 
 First tagged release. Framework is feature-complete for single-repo use.
