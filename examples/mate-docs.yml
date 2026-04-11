@@ -53,7 +53,7 @@ jobs:
           MATES_ROOT: .claude-mates-framework
         run: bash .claude-mates-framework/runner.sh "docs" ".claude-mates-framework/mates/docs" ".claude-mates.yml"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mate-docs-${{ github.run_number }}

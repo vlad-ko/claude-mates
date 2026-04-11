@@ -79,7 +79,7 @@ jobs:
 
       - name: Upload run summary
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: mate-${{ inputs.mate }}-${{ github.run_number }}
           path: /tmp/mate-*-summary.json
