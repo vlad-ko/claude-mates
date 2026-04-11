@@ -538,7 +538,7 @@ Fixes identified and applied by the \`${MATE_NAME}\` Claude Mate.
 $([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}" || echo "")
 
 ### Changed Files
-$(echo "$ALL_CHANGED" | sed 's/^/- /')
+$(printf '%s\n' "$ALL_CHANGED" | while IFS= read -r f; do [ -n "$f" ] && echo "- $f"; done)
 $([ "$VIOLATIONS_FOUND" -gt 0 ] && echo "
 ### Validation Notes
 $VIOLATIONS_FOUND file(s) were reverted by the runner for violating scope or protected path rules. See CI logs for details." || echo "")
