@@ -263,6 +263,8 @@ echo ""
 echo "=== Claude Analysis Output ==="
 
 CLAUDE_RESULT=""
+CLAUDE_STATUS="empty"  # Tracks output quality: ok, clean, error, empty
+
 if [ -f "/tmp/mate-${MATE_NAME}-output.json" ]; then
   CLAUDE_RESULT=$(python3 -c "
 import json, sys
@@ -291,6 +293,27 @@ except Exception as e:
     print(f'(parse error: {e})')
 " 2>/dev/null || echo "(failed to parse Claude output)")
 
+  # ─── Classify the output ───────────────────────────────────────────────
+  # CODE-ENFORCED: Detect errors, empty results, and clean runs BEFORE
+  # any issue creation. Don't rely on LLM output wording alone.
+
+  # Check for API/CLI errors in the output
+  if echo "$CLAUDE_RESULT" | grep -qiE "rate_limit_error|API Error|overloaded_error|server_error|authentication_error|invalid_api_key|connection_error|timeout"; then
+    CLAUDE_STATUS="error"
+    echo "::warning::Claude CLI returned an API error — skipping issue creation"
+  # Check for failed/empty output parsing
+  elif echo "$CLAUDE_RESULT" | grep -qE "^\(no result text found|^\(parse error|^\(failed to parse"; then
+    CLAUDE_STATUS="empty"
+    echo "::warning::Claude output parsing failed — skipping issue creation"
+  # Check for clean run signals (broad matching)
+  elif echo "$CLAUDE_RESULT" | grep -qiE "no (issues|findings|changes|problems|vulnerabilities|concerns|errors|bugs|security issues)|everything looks good|nothing to (report|fix|flag|do)|codebase (is|looks) clean|no action needed|clean[[:space:]]*$|exiting cleanly|no .* found|no .* detected|no .* needed|repository is clean"; then
+    CLAUDE_STATUS="clean"
+  else
+    CLAUDE_STATUS="ok"
+  fi
+
+  echo "Output status: $CLAUDE_STATUS"
+
   # Log first 3000 chars of Claude's analysis to CI
   echo "$CLAUDE_RESULT" | head -c 3000
   if [ ${#CLAUDE_RESULT} -gt 3000 ]; then
@@ -299,6 +322,7 @@ except Exception as e:
   fi
 else
   echo "(no output file found)"
+  CLAUDE_STATUS="empty"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -325,35 +349,50 @@ ALL_CHANGED=$(echo -e "${CHANGED_FILES}\n${UNTRACKED_FILES}" | sed '/^$/d' | sor
 if [ -z "$ALL_CHANGED" ]; then
   echo "No file changes detected by Claude."
 
-  # Determine if Claude found anything worth reporting
-  if [ -z "$CLAUDE_RESULT" ] || echo "$CLAUDE_RESULT" | grep -qiE "no (issues|findings|changes|problems)|everything looks good|clean|nothing to"; then
-    echo "Claude found no issues — codebase is clean for this mate's scope."
-    OUTCOME="clean"
-  elif [ -n "$EXISTING_ISSUE" ]; then
-    echo "Claude reported findings but made no file edits. Existing issue #${EXISTING_ISSUE} covers these."
-    ISSUE_NUM="$EXISTING_ISSUE"
-    OUTCOME="no_changes_existing_issue"
-  else
-    echo "Claude reported findings but made no file edits. Creating issue..."
-    ISSUE_TITLE="[${LABEL_PREFIX}:${MATE_NAME}] ${MATE_DESC} findings — $(date +%Y-%m-%d)"
-    ISSUE_BODY="${CLAUDE_RESULT:-${MATE_DESC} analysis complete. See details above.}"
+  # CODE-ENFORCED: Use CLAUDE_STATUS (set in Phase 1.5) to decide actions.
+  # Only "ok" status creates issues. Errors, empty, and clean runs do NOT.
+  case "$CLAUDE_STATUS" in
+    clean)
+      echo "Claude found no issues — codebase is clean for this mate's scope."
+      OUTCOME="clean"
+      ;;
+    error)
+      echo "Claude encountered an API error — no issue created. Check CI logs."
+      OUTCOME="error"
+      ;;
+    empty)
+      echo "Claude output was empty or unparseable — no issue created."
+      OUTCOME="clean"
+      ;;
+    ok)
+      # Real findings — create issue or reference existing one
+      if [ -n "$EXISTING_ISSUE" ]; then
+        echo "Claude reported findings but made no file edits. Existing issue #${EXISTING_ISSUE} covers these."
+        ISSUE_NUM="$EXISTING_ISSUE"
+        OUTCOME="no_changes_existing_issue"
+      else
+        echo "Claude reported findings but made no file edits. Creating issue..."
+        ISSUE_TITLE="[${LABEL_PREFIX}:${MATE_NAME}] ${MATE_DESC} findings — $(date +%Y-%m-%d)"
+        ISSUE_BODY="$CLAUDE_RESULT"
 
-    ISSUE_URL=$(gh issue create \
-      --title "$ISSUE_TITLE" \
-      --label "$MATE_LABEL" \
-      --body "$ISSUE_BODY" 2>/tmp/mate-issue-error.txt || echo "")
+        ISSUE_URL=$(gh issue create \
+          --title "$ISSUE_TITLE" \
+          --label "$MATE_LABEL" \
+          --body "$ISSUE_BODY" 2>/tmp/mate-issue-error.txt || echo "")
 
-    if echo "$ISSUE_URL" | grep -q "^https://"; then
-      ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
-      ISSUE_URL_OUT="$ISSUE_URL"
-      EXISTING_ISSUE="$ISSUE_NUM"
-      OUTCOME="issue_created"
-    else
-      ISSUE_ERROR=$(cat /tmp/mate-issue-error.txt 2>/dev/null || echo "unknown error")
-      echo "Issue creation failed: $ISSUE_ERROR"
-      OUTCOME="findings_no_issue"
-    fi
-  fi
+        if echo "$ISSUE_URL" | grep -q "^https://"; then
+          ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+          ISSUE_URL_OUT="$ISSUE_URL"
+          EXISTING_ISSUE="$ISSUE_NUM"
+          OUTCOME="issue_created"
+        else
+          ISSUE_ERROR=$(cat /tmp/mate-issue-error.txt 2>/dev/null || echo "unknown error")
+          echo "Issue creation failed: $ISSUE_ERROR"
+          OUTCOME="findings_no_issue"
+        fi
+      fi
+      ;;
+  esac
 else
   PRE_VALIDATION_COUNT=$(echo "$ALL_CHANGED" | wc -l | tr -d ' ')
   echo "File changes detected ($PRE_VALIDATION_COUNT files before validation):"
@@ -627,6 +666,11 @@ case "$OUTCOME" in
   findings_no_issue)
     echo "║  RESULT:   Findings reported (issue creation skipped)"
     echo "║  Issue:    Not created — check Claude output above"
+    echo "║  PR:       Not created"
+    ;;
+  error)
+    echo "║  RESULT:   Error — Claude API/CLI failure"
+    echo "║  Issue:    Not created (API error, not a finding)"
     echo "║  PR:       Not created"
     ;;
   issue_only_pr_failed)
