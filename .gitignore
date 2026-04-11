@@ -3,3 +3,6 @@ node_modules/
 .env.local
 /tmp/
 *.log
+
+# Runtime-injected files (loaded by workflow, never committed)
+.claude/skills/wizard/

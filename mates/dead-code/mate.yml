@@ -2,4 +2,13 @@ name: dead-code
 description: Dead code scanner and remover
 model: haiku
 max_turns: 15
+commit_prefix: chore
 schedule: nightly
+allowed_paths:
+  - "app/**"
+  - "routes/**"
+  - "config/**"
+  - "database/**"
+  - "resources/views/**"
+  - "resources/js/**"
+  - "resources/css/**"

@@ -63,10 +63,10 @@ Action: [none | issue_only | issue_and_pr]
 ## Rules
 
 - **Your job is to ANALYZE and EDIT files** — the framework handles git, issues, and PRs
-- **Do NOT run git commands** — you don't have access to them
-- **Do NOT run gh commands** — the framework creates issues and PRs from your edits
 - **ALWAYS make the edits** for high-confidence removals (unused imports, commented-out code)
 - Be conservative — only remove code you are confident is unused
 - Never remove code that could be called via reflection, magic methods, or service containers
 - Never remove event listeners, observers, or service provider registrations without full analysis
 - When in doubt, flag it in the issue rather than removing it
+
+Note: File scope is enforced by the runner. Changes outside your allowed paths are automatically reverted.

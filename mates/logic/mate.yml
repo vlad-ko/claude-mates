@@ -2,4 +2,9 @@ name: logic
 description: Business logic auditor
 model: haiku
 max_turns: 15
+commit_prefix: refactor
 schedule: nightly
+allowed_paths:
+  - "app/**"
+  - "routes/**"
+  - "config/**"
