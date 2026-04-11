@@ -59,6 +59,32 @@ protected_paths:           # Files NO mate may edit (global, in runner.sh)
 - `commit_prefix`: Used for conventional commit messages (not hard-coded to `docs:`).
 - `description`: Used for issue titles and PR descriptions.
 
+### Project Configuration (.claude-mates.yml)
+
+Consumer projects can override mate defaults in `.claude-mates.yml`:
+
+```yaml
+mates:
+  docs:
+    enabled: true
+    model: haiku                # Override mate.yml default
+    schedule: post-merge        # Override trigger
+    allowed_paths:              # Override scope (replaces mate.yml defaults)
+      - "docs/**"
+      - "CLAUDE.md"
+      - "README.md"
+  security:
+    enabled: true
+    model: sonnet
+```
+
+- `allowed_paths`: If specified, **replaces** (not merges with) the mate.yml default. Allows projects to restrict scope beyond what the mate declares.
+- `model`: Override the mate's default model for this project.
+- `schedule`: Override the mate's trigger (e.g., `post-merge`, `on-demand`).
+- `enabled`: Turn a mate on or off for this project.
+
+Code-enforced in Phase 2: the runner reads project config and applies overrides before validating Claude's changes.
+
 ## File Structure
 
 ```
@@ -103,6 +129,7 @@ description: <one-line>     # Used in issue titles, PR descriptions
 model: haiku|sonnet|opus    # Default model (can be overridden by project config)
 max_turns: 15               # Maximum Claude turns
 commit_prefix: <prefix>     # Conventional commit prefix (docs, security, chore, test, refactor)
+schedule: post-merge        # Trigger: post-merge, nightly, or on-demand
 allowed_paths:              # Glob patterns for files this mate may edit
   - "path/**"
 ```
