@@ -19,6 +19,8 @@ jobs:
   logic:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     if: >-
       !contains(github.event.head_commit.message || '', '[claude-mate') &&
@@ -30,15 +32,15 @@ jobs:
       issues: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 2
 
       # Pin to specific commit SHA — update when upgrading claude-mates
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: vlad-ko/claude-mates
-          ref: REPLACE_WITH_LATEST_SHA  # Update this after each claude-mates release
+          ref: v0.1.0  # Pin to a release tag — see https://github.com/vlad-ko/claude-mates/releases
           path: .claude-mates-framework
 
       - run: npm install -g @anthropic-ai/claude-code@2.1.97
@@ -53,7 +55,7 @@ jobs:
           MATES_ROOT: .claude-mates-framework
         run: bash .claude-mates-framework/runner.sh "logic" ".claude-mates-framework/mates/logic" ".claude-mates.yml"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: mate-logic-${{ github.run_number }}

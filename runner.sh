@@ -67,7 +67,7 @@ print(config.get('description', '$MATE_NAME'))
 " 2>/dev/null || echo "$MATE_NAME")
 fi
 
-# Read allowed_paths from mate.yml (code-enforced scope)
+# Read allowed_paths from mate.yml (code-enforced scope — defaults)
 ALLOWED_PATHS=$(python3 -c "
 import yaml
 with open('$MATE_CONFIG') as f:
@@ -76,6 +76,24 @@ paths = config.get('allowed_paths', [])
 if paths:
     print('\n'.join(paths))
 " 2>/dev/null || echo "")
+
+# Override allowed_paths from project config if specified
+# Project config REPLACES mate.yml defaults (not merges)
+if [ -f "$CONFIG_PATH" ]; then
+  PROJECT_ALLOWED=$(python3 -c "
+import yaml
+with open('$CONFIG_PATH') as f:
+    config = yaml.safe_load(f)
+mate_config = config.get('mates', {}).get('$MATE_NAME', {})
+paths = mate_config.get('allowed_paths', [])
+if paths:
+    print('\n'.join(paths))
+" 2>/dev/null || echo "")
+
+  if [ -n "$PROJECT_ALLOWED" ]; then
+    ALLOWED_PATHS="$PROJECT_ALLOWED"
+  fi
+fi
 
 # Override model from project config if specified
 if [ -f "$CONFIG_PATH" ]; then
@@ -520,7 +538,7 @@ Fixes identified and applied by the \`${MATE_NAME}\` Claude Mate.
 $([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}" || echo "")
 
 ### Changed Files
-$(echo "$ALL_CHANGED" | sed 's/^/- /')
+$(printf '%s\n' "$ALL_CHANGED" | while IFS= read -r f; do [ -n "$f" ] && echo "- $f"; done)
 $([ "$VIOLATIONS_FOUND" -gt 0 ] && echo "
 ### Validation Notes
 $VIOLATIONS_FOUND file(s) were reverted by the runner for violating scope or protected path rules. See CI logs for details." || echo "")

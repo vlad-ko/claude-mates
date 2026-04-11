@@ -1,5 +1,7 @@
 # Claude Mates
 
+[![Release](https://img.shields.io/github/v/release/vlad-ko/claude-mates)](https://github.com/vlad-ko/claude-mates/releases)
+
 Autonomous background agents for codebase maintenance, powered by Claude Code CLI.
 
 Inspired by [AI Daemons](https://ai-daemons.com/spec/) but built natively on Claude Code's skills, tools, and CLAUDE.md conventions.
@@ -51,6 +53,8 @@ cp examples/mate-*.yml .github/workflows/
 
 Each mate is a separate workflow — independent triggers, logs, and concurrency.
 
+> **Important:** Example workflows reference `ref: v0.1.0`. Pin to the latest [release tag](https://github.com/vlad-ko/claude-mates/releases) for stability. Check the releases page for upgrade instructions.
+
 ### 3. Add project config
 
 Create `.claude-mates.yml` in your repo root:
@@ -61,6 +65,11 @@ mates:
     enabled: true
     model: haiku
     schedule: post-merge
+    # Override default scope (optional — defaults come from mate.yml)
+    allowed_paths:
+      - "docs/**"
+      - "CLAUDE.md"
+      - "README.md"
   security:
     enabled: true
     model: sonnet
@@ -124,6 +133,27 @@ Runner (for each mate):
 4. **Cost-bounded** — max turns per run, model selection per mate
 5. **Observable** — every run produces a structured summary
 6. **Safe** — deny rules prevent destructive actions
+
+## Versioning
+
+Claude Mates follows [semantic versioning](https://semver.org/). Pin your workflows to a release tag:
+
+```yaml
+# In your workflow file
+- uses: actions/checkout@v5
+  with:
+    repository: vlad-ko/claude-mates
+    ref: v0.1.0  # Pin to release tag
+    path: .claude-mates-framework
+```
+
+Check [CHANGELOG.md](CHANGELOG.md) for what changed between versions.
+
+## Repo Settings
+
+For mates to create PRs, enable this repo setting:
+
+**Settings > Actions > General > Workflow permissions > Allow GitHub Actions to create and approve pull requests**
 
 ## License
 
