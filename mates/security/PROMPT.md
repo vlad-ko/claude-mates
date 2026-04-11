@@ -68,10 +68,10 @@ Action: [none | issue_only | issue_and_pr]
 ## Rules
 
 - **Your job is to ANALYZE and EDIT files** — the framework handles git, issues, and PRs
-- **Do NOT run git commands** — you don't have access to them
-- **Do NOT run gh commands** — the framework creates issues and PRs from your edits
 - **ALWAYS make the edits** to fix straightforward security findings
 - Do NOT touch business logic — only security-related fixes
 - Do NOT rewrite code for style — only for security
 - Err on the side of reporting rather than ignoring potential issues
 - Flag false positives clearly so they can be dismissed
+
+Note: File scope is enforced by the runner. Changes outside your allowed paths are automatically reverted.

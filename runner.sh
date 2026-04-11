@@ -1,6 +1,11 @@
 #!/bin/bash
 # Claude Mates Runner
 # Executes a single mate using Claude Code CLI
+#
+# ARCHITECTURE: Code enforces, prompts guide.
+# - Phase 1 (Claude): Analyzes and edits files. Constrained by --allowedTools.
+# - Phase 2 (Shell):  Validates changes against hard rules. Creates branch/commit/issue/PR.
+#   All hard rules are enforced HERE, not in prompts. Prompts guide behavior only.
 
 set -euo pipefail
 
@@ -22,9 +27,16 @@ if [ ! -f "$PROMPT_FILE" ]; then
   exit 1
 fi
 
-# Read mate config
+# ═══════════════════════════════════════════════════════════════════════════
+# CONFIGURATION — Read all mate settings from mate.yml and project config
+# Hard rules are read here, enforced in Phase 2.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Read mate config with defaults
 MODEL="haiku"
 MAX_TURNS=15
+COMMIT_PREFIX="chore"
+MATE_DESC="$MATE_NAME"
 if [ -f "$MATE_CONFIG" ]; then
   MODEL=$(python3 -c "
 import yaml
@@ -39,7 +51,31 @@ with open('$MATE_CONFIG') as f:
     config = yaml.safe_load(f)
 print(config.get('max_turns', 15))
 " 2>/dev/null || echo "15")
+
+  COMMIT_PREFIX=$(python3 -c "
+import yaml
+with open('$MATE_CONFIG') as f:
+    config = yaml.safe_load(f)
+print(config.get('commit_prefix', 'chore'))
+" 2>/dev/null || echo "chore")
+
+  MATE_DESC=$(python3 -c "
+import yaml
+with open('$MATE_CONFIG') as f:
+    config = yaml.safe_load(f)
+print(config.get('description', '$MATE_NAME'))
+" 2>/dev/null || echo "$MATE_NAME")
 fi
+
+# Read allowed_paths from mate.yml (code-enforced scope)
+ALLOWED_PATHS=$(python3 -c "
+import yaml
+with open('$MATE_CONFIG') as f:
+    config = yaml.safe_load(f)
+paths = config.get('allowed_paths', [])
+if paths:
+    print('\n'.join(paths))
+" 2>/dev/null || echo "")
 
 # Override model from project config if specified
 if [ -f "$CONFIG_PATH" ]; then
@@ -66,8 +102,13 @@ esac
 
 echo "Model: $MODEL_ID"
 echo "Max turns: $MAX_TURNS"
+echo "Commit prefix: $COMMIT_PREFIX"
+echo "Description: $MATE_DESC"
+if [ -n "$ALLOWED_PATHS" ]; then
+  echo "Allowed paths: $(echo "$ALLOWED_PATHS" | tr '\n' ', ')"
+fi
 
-# Read deny rules from project config
+# Read deny rules from project config (injected as prompt defense-in-depth)
 DENY_RULES=""
 if [ -f "$CONFIG_PATH" ]; then
   DENY_RULES=$(python3 -c "
@@ -79,7 +120,7 @@ print('\n'.join(f'- {r}' for r in rules))
 " 2>/dev/null || echo "")
 fi
 
-# Build the full prompt
+# Build label names
 LABEL_PREFIX="claude-mate"
 if [ -f "$CONFIG_PATH" ]; then
   LABEL_PREFIX=$(python3 -c "
@@ -98,7 +139,6 @@ gh label create "$MATE_LABEL" --description "Claude Mate: ${MATE_NAME}" --color 
 BRANCH_NAME="${LABEL_PREFIX}/${MATE_NAME}/$(date +%Y-%m-%d-%H%M)"
 
 # Check if a PR already exists for this mate today (prevent duplicates)
-# Use date-only prefix to catch any run from today
 BRANCH_PREFIX="${LABEL_PREFIX}/${MATE_NAME}/$(date +%Y-%m-%d)"
 EXISTING_PR=$(gh pr list --search "head:${BRANCH_PREFIX}" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
 if [ -n "$EXISTING_PR" ]; then
@@ -129,7 +169,7 @@ ${DENY_RULES}
 - Max 1 PR per run
 - Max 1 issue per run"
 
-# Read skills from project config (skills the mate should invoke via /skill-name)
+# Read skills from project config
 SKILLS_NOTE=""
 if [ -f "$CONFIG_PATH" ]; then
   SKILLS_LIST=$(python3 -c "
@@ -177,12 +217,14 @@ fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PHASE 1: Claude analyzes and edits files (no git, no gh — just file ops)
+# Tool restrictions are CODE-ENFORCED via --allowedTools.
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "=== Phase 1: Claude Code Analysis & Edits ==="
 START_TIME=$(date +%s)
 
 # Claude gets file tools ONLY — no git/gh. Shell handles all git mechanics.
+# This is the primary security boundary: Claude cannot run arbitrary commands.
 claude -p "$FULL_PROMPT" \
   --model "$MODEL_ID" \
   --allowedTools "Read,Glob,Grep,Edit,Write,Bash(find *),Bash(wc *),Bash(mv *),Bash(cat *),Bash(head *),Bash(tail *)" \
@@ -197,10 +239,56 @@ echo ""
 echo "=== Phase 1 Complete (${DURATION}s) ==="
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PHASE 2: Shell handles git mechanics deterministically
+# PHASE 1.5: Extract and log Claude's analysis (for debugging visibility)
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "=== Phase 2: Git & GitHub Operations ==="
+echo "=== Claude Analysis Output ==="
+
+CLAUDE_RESULT=""
+if [ -f "/tmp/mate-${MATE_NAME}-output.json" ]; then
+  CLAUDE_RESULT=$(python3 -c "
+import json, sys
+try:
+    with open('/tmp/mate-${MATE_NAME}-output.json') as f:
+        data = json.load(f)
+    # Try multiple JSON paths — Claude CLI output format may vary
+    for key in ['result', 'content', 'text', 'output']:
+        val = data.get(key)
+        if val:
+            if isinstance(val, list):
+                # Handle content blocks (list of dicts with 'text' key)
+                parts = []
+                for block in val:
+                    if isinstance(block, dict) and 'text' in block:
+                        parts.append(block['text'])
+                    elif isinstance(block, str):
+                        parts.append(block)
+                val = '\n'.join(parts)
+            if isinstance(val, str) and val.strip():
+                print(val.strip())
+                sys.exit(0)
+    # If no result found, dump top-level keys for debugging
+    print('(no result text found — keys: ' + ', '.join(data.keys()) + ')')
+except Exception as e:
+    print(f'(parse error: {e})')
+" 2>/dev/null || echo "(failed to parse Claude output)")
+
+  # Log first 3000 chars of Claude's analysis to CI
+  echo "$CLAUDE_RESULT" | head -c 3000
+  if [ ${#CLAUDE_RESULT} -gt 3000 ]; then
+    echo ""
+    echo "... (truncated, full output in artifact)"
+  fi
+else
+  echo "(no output file found)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PHASE 2: Shell handles git mechanics — ALL HARD RULES ENFORCED HERE
+# The LLM has no say in this phase. Code validates, code decides.
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== Phase 2: Validation & Git Operations ==="
 
 # Track outcomes for the summary
 OUTCOME="none"
@@ -209,43 +297,33 @@ PR_NUM=""
 ISSUE_URL_OUT=""
 PR_URL_OUT=""
 FILES_CHANGED_COUNT=0
+VIOLATIONS_FOUND=0
 
-# Check if Claude made any file changes
+# Collect all changed files (modified + untracked)
 CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
 UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+ALL_CHANGED=$(echo -e "${CHANGED_FILES}\n${UNTRACKED_FILES}" | sed '/^$/d' | sort -u)
 
-if [ -z "$CHANGED_FILES" ] && [ -z "$UNTRACKED_FILES" ]; then
+if [ -z "$ALL_CHANGED" ]; then
   echo "No file changes detected by Claude."
 
-  # Extract Claude's analysis output
-  CLAUDE_OUTPUT=$(python3 -c "
-import json
-try:
-    with open('/tmp/mate-${MATE_NAME}-output.json') as f:
-        data = json.load(f)
-    result = data.get('result', data.get('content', ''))
-    print(result if result else '')
-except:
-    print('')
-" 2>/dev/null || echo "")
-
   # Determine if Claude found anything worth reporting
-  if [ -z "$CLAUDE_OUTPUT" ] || echo "$CLAUDE_OUTPUT" | grep -qiE "no (issues|findings|changes|problems)|everything looks good|clean|nothing to"; then
-    # Claude found nothing — this is a CLEAN run, not a failure
+  if [ -z "$CLAUDE_RESULT" ] || echo "$CLAUDE_RESULT" | grep -qiE "no (issues|findings|changes|problems)|everything looks good|clean|nothing to"; then
     echo "Claude found no issues — codebase is clean for this mate's scope."
     OUTCOME="clean"
   elif [ -n "$EXISTING_ISSUE" ]; then
-    # Claude had findings but made no edits, and an issue already exists
     echo "Claude reported findings but made no file edits. Existing issue #${EXISTING_ISSUE} covers these."
     ISSUE_NUM="$EXISTING_ISSUE"
     OUTCOME="no_changes_existing_issue"
   else
-    # Claude had findings but made no edits — create an issue with the analysis
     echo "Claude reported findings but made no file edits. Creating issue..."
+    ISSUE_TITLE="[${LABEL_PREFIX}:${MATE_NAME}] ${MATE_DESC} findings — $(date +%Y-%m-%d)"
+    ISSUE_BODY="${CLAUDE_RESULT:-${MATE_DESC} analysis complete. See details above.}"
+
     ISSUE_URL=$(gh issue create \
-      --title "[${LABEL_PREFIX}:${MATE_NAME}] Review findings — $(date +%Y-%m-%d)" \
+      --title "$ISSUE_TITLE" \
       --label "$MATE_LABEL" \
-      --body "$CLAUDE_OUTPUT" 2>/tmp/mate-issue-error.txt || echo "")
+      --body "$ISSUE_BODY" 2>/tmp/mate-issue-error.txt || echo "")
 
     if echo "$ISSUE_URL" | grep -q "^https://"; then
       ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
@@ -259,83 +337,215 @@ except:
     fi
   fi
 else
-  echo "File changes detected:"
-  echo "$CHANGED_FILES"
-  echo "$UNTRACKED_FILES"
+  PRE_VALIDATION_COUNT=$(echo "$ALL_CHANGED" | wc -l | tr -d ' ')
+  echo "File changes detected ($PRE_VALIDATION_COUNT files before validation):"
+  echo "$ALL_CHANGED"
 
-  # Step 1: Create issue if none exists
-  if [ -z "$EXISTING_ISSUE" ]; then
-    echo "Creating issue for findings..."
-    CLAUDE_OUTPUT=$(python3 -c "
-import json
-try:
-    with open('/tmp/mate-${MATE_NAME}-output.json') as f:
-        data = json.load(f)
-    print(data.get('result', data.get('content', 'Documentation fixes applied.')))
-except:
-    print('Documentation fixes applied. See PR for details.')
-" 2>/dev/null || echo "Documentation fixes applied. See PR for details.")
+  # ═══════════════════════════════════════════════════════════════════════
+  # HARD RULE: Protected paths — NEVER allow modification
+  # These files are framework core, governance, and infrastructure.
+  # Any changes to these are REVERTED, regardless of what the LLM decided.
+  # ═══════════════════════════════════════════════════════════════════════
+  echo ""
+  echo "--- Validating protected paths ---"
+  PROTECTED_PATTERN="^(runner\.sh|dispatcher\.sh|action\.yml|CODEOWNERS|SECURITY\.md|\.github/workflows/|\.env)"
+  PROTECTED_VIOLATIONS=$(echo "$ALL_CHANGED" | grep -E "$PROTECTED_PATTERN" || echo "")
 
-    ISSUE_URL=$(gh issue create \
-      --title "[${LABEL_PREFIX}:${MATE_NAME}] Documentation update needed — $(date +%Y-%m-%d)" \
-      --label "$MATE_LABEL" \
-      --body "$CLAUDE_OUTPUT" 2>/tmp/mate-issue-error.txt || echo "")
+  # Also protect other mates' config (a mate should never edit another mate's files)
+  OTHER_MATE_VIOLATIONS=$(echo "$ALL_CHANGED" | grep "^mates/" | grep -v "^mates/${MATE_NAME}/" 2>/dev/null || echo "")
 
-    if echo "$ISSUE_URL" | grep -q "^https://"; then
-      ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
-      ISSUE_URL_OUT="$ISSUE_URL"
-      EXISTING_ISSUE="$ISSUE_NUM"
+  ALL_VIOLATIONS=$(echo -e "${PROTECTED_VIOLATIONS}\n${OTHER_MATE_VIOLATIONS}" | sed '/^$/d' | sort -u)
+
+  if [ -n "$ALL_VIOLATIONS" ]; then
+    echo "::warning::Mate '$MATE_NAME' attempted to modify protected files — reverting:"
+    echo "$ALL_VIOLATIONS"
+    VIOLATIONS_FOUND=$(echo "$ALL_VIOLATIONS" | wc -l | tr -d ' ')
+
+    # Revert each protected file
+    while IFS= read -r file; do
+      if [ -n "$file" ]; then
+        if git ls-files --error-unmatch "$file" 2>/dev/null; then
+          # Tracked file — revert to HEAD
+          git checkout -- "$file" 2>/dev/null || true
+        else
+          # Untracked file — delete it
+          rm -f "$file" 2>/dev/null || true
+        fi
+        echo "  Reverted: $file"
+      fi
+    done <<< "$ALL_VIOLATIONS"
+  else
+    echo "No protected path violations."
+  fi
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # HARD RULE: Scope enforcement — only allow changes to mate's allowed_paths
+  # If mate.yml defines allowed_paths, changes outside those paths are REVERTED.
+  # ═══════════════════════════════════════════════════════════════════════
+  if [ -n "$ALLOWED_PATHS" ]; then
+    echo ""
+    echo "--- Validating scope boundaries ---"
+
+    # Re-collect changes after protected path reverts
+    CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
+    UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+    ALL_CHANGED=$(echo -e "${CHANGED_FILES}\n${UNTRACKED_FILES}" | sed '/^$/d' | sort -u)
+
+    # Check each changed file against allowed_paths using Python fnmatch
+    SCOPE_VIOLATIONS=$(python3 -c "
+import fnmatch, sys
+
+allowed = '''$ALLOWED_PATHS'''.strip().split('\n')
+changed = '''$ALL_CHANGED'''.strip().split('\n')
+
+for f in changed:
+    f = f.strip()
+    if not f:
+        continue
+    matched = False
+    for pattern in allowed:
+        pattern = pattern.strip()
+        if not pattern:
+            continue
+        if fnmatch.fnmatch(f, pattern):
+            matched = True
+            break
+    if not matched:
+        print(f)
+" 2>/dev/null || echo "")
+
+    if [ -n "$SCOPE_VIOLATIONS" ]; then
+      echo "::warning::Mate '$MATE_NAME' edited files outside its allowed scope — reverting:"
+      echo "$SCOPE_VIOLATIONS"
+      SCOPE_VIOLATION_COUNT=$(echo "$SCOPE_VIOLATIONS" | wc -l | tr -d ' ')
+      VIOLATIONS_FOUND=$((VIOLATIONS_FOUND + SCOPE_VIOLATION_COUNT))
+
+      # Revert out-of-scope files
+      while IFS= read -r file; do
+        if [ -n "$file" ]; then
+          if git ls-files --error-unmatch "$file" 2>/dev/null; then
+            git checkout -- "$file" 2>/dev/null || true
+          else
+            rm -f "$file" 2>/dev/null || true
+          fi
+          echo "  Reverted: $file"
+        fi
+      done <<< "$SCOPE_VIOLATIONS"
     else
-      echo "Issue creation failed: $(cat /tmp/mate-issue-error.txt 2>/dev/null || echo 'unknown error')"
+      echo "All changes within allowed scope."
     fi
   fi
 
-  # Step 2: Create branch, commit, push
-  # Configure git identity for CI (GitHub Actions runners have no default identity)
-  git config user.name "Claude Mates [bot]"
-  git config user.email "claude-mates[bot]@users.noreply.github.com"
+  # ═══════════════════════════════════════════════════════════════════════
+  # HARD RULE: Change size guardrail
+  # Warn if a mate modified too many files — probably something wrong.
+  # ═══════════════════════════════════════════════════════════════════════
 
-  echo "Creating branch: ${BRANCH_NAME}"
-  git checkout -b "${BRANCH_NAME}" origin/main 2>/dev/null || git checkout -b "${BRANCH_NAME}"
+  # Re-collect changes after all reverts
+  CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
+  UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+  ALL_CHANGED=$(echo -e "${CHANGED_FILES}\n${UNTRACKED_FILES}" | sed '/^$/d' | sort -u)
 
-  git add -A
-  git commit -m "docs: Fix documentation findings [${LABEL_PREFIX}:${MATE_NAME}]
+  if [ -z "$ALL_CHANGED" ]; then
+    echo ""
+    echo "All changes were outside scope or protected — nothing to commit."
+    if [ "$VIOLATIONS_FOUND" -gt 0 ]; then
+      OUTCOME="violations_only"
+    else
+      OUTCOME="clean"
+    fi
+  else
+    VALID_FILE_COUNT=$(echo "$ALL_CHANGED" | wc -l | tr -d ' ')
+    echo ""
+    echo "Valid changes after validation: $VALID_FILE_COUNT files"
+    echo "$ALL_CHANGED"
 
-Automated fixes by Claude Mates docs reviewer.
+    MAX_FILES=20
+    if [ "$VALID_FILE_COUNT" -gt "$MAX_FILES" ]; then
+      echo "::warning::Mate '$MATE_NAME' modified $VALID_FILE_COUNT files (threshold: $MAX_FILES). Review carefully."
+    fi
+
+    # ═════════════════════════════════════════════════════════════════════
+    # Create issue (if none exists) — title and body driven by mate config
+    # ═════════════════════════════════════════════════════════════════════
+    if [ -z "$EXISTING_ISSUE" ]; then
+      echo "Creating issue for findings..."
+      ISSUE_TITLE="[${LABEL_PREFIX}:${MATE_NAME}] ${MATE_DESC} — $(date +%Y-%m-%d)"
+      ISSUE_BODY="${CLAUDE_RESULT:-${MATE_DESC} analysis complete. See PR for details.}"
+
+      ISSUE_URL=$(gh issue create \
+        --title "$ISSUE_TITLE" \
+        --label "$MATE_LABEL" \
+        --body "$ISSUE_BODY" 2>/tmp/mate-issue-error.txt || echo "")
+
+      if echo "$ISSUE_URL" | grep -q "^https://"; then
+        ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+        ISSUE_URL_OUT="$ISSUE_URL"
+        EXISTING_ISSUE="$ISSUE_NUM"
+      else
+        echo "Issue creation failed: $(cat /tmp/mate-issue-error.txt 2>/dev/null || echo 'unknown error')"
+      fi
+    fi
+
+    # ═════════════════════════════════════════════════════════════════════
+    # Create branch, commit, push — all deterministic, no LLM involvement
+    # Commit message uses mate.yml commit_prefix, not hard-coded "docs:"
+    # ═════════════════════════════════════════════════════════════════════
+
+    # Configure git identity for CI
+    git config user.name "Claude Mates [bot]"
+    git config user.email "claude-mates[bot]@users.noreply.github.com"
+
+    echo "Creating branch: ${BRANCH_NAME}"
+    git checkout -b "${BRANCH_NAME}" origin/main 2>/dev/null || git checkout -b "${BRANCH_NAME}"
+
+    git add -A
+    COMMIT_MSG="${COMMIT_PREFIX}: ${MATE_DESC} findings [${LABEL_PREFIX}:${MATE_NAME}]
+
+Automated fixes by Claude Mates ${MATE_NAME} reviewer.
 $([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}")"
 
-  git push origin "${BRANCH_NAME}" 2>/dev/null
+    git commit -m "$COMMIT_MSG"
 
-  # Step 3: Create PR
-  PR_BODY="## Automated Documentation Fixes
+    git push origin "${BRANCH_NAME}" 2>/dev/null
+
+    # ═════════════════════════════════════════════════════════════════════
+    # Create PR — title and body driven by mate config
+    # ═════════════════════════════════════════════════════════════════════
+    PR_TITLE="[${LABEL_PREFIX}:${MATE_NAME}] ${MATE_DESC} fixes"
+    PR_BODY="## ${MATE_DESC} — Automated Fixes
 
 Fixes identified and applied by the \`${MATE_NAME}\` Claude Mate.
 
 $([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}" || echo "")
 
 ### Changed Files
-$(echo "$CHANGED_FILES" "$UNTRACKED_FILES" | sed '/^$/d' | sed 's/^/- /')
+$(echo "$ALL_CHANGED" | sed 's/^/- /')
+$([ "$VIOLATIONS_FOUND" -gt 0 ] && echo "
+### Validation Notes
+$VIOLATIONS_FOUND file(s) were reverted by the runner for violating scope or protected path rules. See CI logs for details." || echo "")
 
 ---
 *Generated by [Claude Mates](https://github.com/vlad-ko/claude-mates)*"
 
-  PR_ERROR=""
-  PR_URL=$(gh pr create \
-    --title "[${LABEL_PREFIX}:${MATE_NAME}] Fix documentation findings" \
-    --body "$PR_BODY" \
-    --base main \
-    --head "${BRANCH_NAME}" \
-    --label "$MATE_LABEL" 2>/tmp/mate-pr-error.txt || echo "")
+    PR_ERROR=""
+    PR_URL=$(gh pr create \
+      --title "$PR_TITLE" \
+      --body "$PR_BODY" \
+      --base main \
+      --head "${BRANCH_NAME}" \
+      --label "$MATE_LABEL" 2>/tmp/mate-pr-error.txt || echo "")
 
-  if echo "$PR_URL" | grep -q "^https://"; then
-    PR_NUM=$(echo "$PR_URL" | grep -o '[0-9]*$')
-    PR_URL_OUT="$PR_URL"
-    FILES_CHANGED_COUNT=$(echo "$CHANGED_FILES" "$UNTRACKED_FILES" | sed '/^$/d' | wc -l | tr -d ' ')
-    OUTCOME="issue_and_pr"
-  else
-    PR_ERROR=$(cat /tmp/mate-pr-error.txt 2>/dev/null || echo "unknown error")
-    echo "PR creation failed: $PR_ERROR"
-    OUTCOME="issue_only_pr_failed"
+    if echo "$PR_URL" | grep -q "^https://"; then
+      PR_NUM=$(echo "$PR_URL" | grep -o '[0-9]*$')
+      PR_URL_OUT="$PR_URL"
+      FILES_CHANGED_COUNT=$(echo "$ALL_CHANGED" | wc -l | tr -d ' ')
+      OUTCOME="issue_and_pr"
+    else
+      PR_ERROR=$(cat /tmp/mate-pr-error.txt 2>/dev/null || echo "unknown error")
+      echo "PR creation failed: $PR_ERROR"
+      OUTCOME="issue_only_pr_failed"
+    fi
   fi
 fi
 
@@ -371,10 +581,12 @@ echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║              CLAUDE MATE RUN SUMMARY                    ║"
 echo "╠══════════════════════════════════════════════════════════╣"
-echo "║  Mate:     ${MATE_NAME}"
-echo "║  Model:    ${MODEL_ID}"
-echo "║  Duration: ${DURATION}s"
-echo "║  Tokens:   ${TOKENS_IN} in / ${TOKENS_OUT} out"
+echo "║  Mate:       ${MATE_NAME}"
+echo "║  Desc:       ${MATE_DESC}"
+echo "║  Model:      ${MODEL_ID}"
+echo "║  Duration:   ${DURATION}s"
+echo "║  Tokens:     ${TOKENS_IN} in / ${TOKENS_OUT} out"
+echo "║  Violations: ${VIOLATIONS_FOUND} files reverted"
 echo "╠══════════════════════════════════════════════════════════╣"
 
 case "$OUTCOME" in
@@ -404,6 +616,11 @@ case "$OUTCOME" in
     echo "║  Issue:    #${ISSUE_NUM}"
     echo "║  PR:       Not created — ${PR_ERROR:-see logs above}"
     ;;
+  violations_only)
+    echo "║  RESULT:   All changes reverted (scope/protected violations)"
+    echo "║  Issue:    Not created"
+    echo "║  PR:       Not created"
+    ;;
   clean)
     echo "║  RESULT:   Clean — no findings, codebase looks good"
     echo "║  Issue:    Not needed"
@@ -418,17 +635,19 @@ esac
 
 echo "╚══════════════════════════════════════════════════════════╝"
 
-# Write to GitHub Actions Job Summary (the markdown panel in the UI)
+# Write to GitHub Actions Job Summary
 if [ -n "$GITHUB_STEP_SUMMARY" ]; then
   cat >> "$GITHUB_STEP_SUMMARY" << MDEOF
 ### Claude Mate: \`${MATE_NAME}\`
 
 | | |
 |---|---|
+| **Description** | ${MATE_DESC} |
 | **Model** | ${MODEL_ID} |
 | **Duration** | ${DURATION}s |
 | **Tokens** | ${TOKENS_IN} in / ${TOKENS_OUT} out |
 | **Result** | ${OUTCOME} |
+| **Violations reverted** | ${VIOLATIONS_FOUND} |
 $([ -n "$ISSUE_NUM" ] && echo "| **Issue** | #${ISSUE_NUM} |")
 $([ -n "$PR_NUM" ] && echo "| **PR** | #${PR_NUM} |")
 $([ "$FILES_CHANGED_COUNT" -gt 0 ] 2>/dev/null && echo "| **Files changed** | ${FILES_CHANGED_COUNT} |")
@@ -439,6 +658,7 @@ fi
 cat > "/tmp/mate-${MATE_NAME}-summary.json" << JSONEOF
 {
   "mate": "${MATE_NAME}",
+  "description": "${MATE_DESC}",
   "model": "${MODEL_ID}",
   "tokens_in": ${TOKENS_IN},
   "tokens_out": ${TOKENS_OUT},
@@ -447,6 +667,7 @@ cat > "/tmp/mate-${MATE_NAME}-summary.json" << JSONEOF
   "issue_number": "${ISSUE_NUM}",
   "pr_number": "${PR_NUM}",
   "files_changed": ${FILES_CHANGED_COUNT},
+  "violations_reverted": ${VIOLATIONS_FOUND},
   "branch": "${BRANCH_NAME}",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }

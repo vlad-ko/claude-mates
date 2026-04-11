@@ -2,4 +2,8 @@ name: tests
 description: Test hygiene reviewer
 model: haiku
 max_turns: 15
+commit_prefix: test
 schedule: nightly
+allowed_paths:
+  - "tests/**"
+  - "database/factories/**"

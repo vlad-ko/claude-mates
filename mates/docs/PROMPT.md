@@ -43,22 +43,17 @@ Check the project's `.claude-mates.yml` for scope overrides. Default scope:
 
 ### If you find documentation issues:
 
-**Step 1: ALWAYS create a GitHub issue first** (unless one already exists — see Context).
+**Describe your findings** in your output, organized by severity:
+- **Incorrect**: Docs that state something factually wrong
+- **Stale**: Docs that reference things that have changed
+- **Missing**: Code changes without corresponding doc updates
+- **Archive candidates**: Current docs that describe superseded architecture
 
-Create a GitHub issue titled `[claude-mate:docs] Documentation update needed — <date>` with:
-- Label: the label from the Context section (e.g., `claude-mate:docs`)
-- Findings organized by severity:
-  - **Incorrect**: Docs that state something factually wrong
-  - **Stale**: Docs that reference things that have changed
-  - **Missing**: Code changes without corresponding doc updates
-  - **Archive candidates**: Current docs that describe superseded architecture
-- For each finding: the file path, what's wrong, and what the fix should be
+For each finding: the file path, what's wrong, and what the fix should be.
 
-If the Context section says an existing open issue already exists, **skip issue creation** and reference that issue number in your PR instead.
+**EDIT the files directly to fix findings.**
 
-**Step 2: EDIT the files directly to fix findings.**
-
-The framework will detect your changes and handle the git/PR mechanics. Most documentation fixes are mechanical — just make the edit:
+The framework will detect your changes and handle git, issue creation, and PR mechanics. Most documentation fixes are mechanical — just make the edit:
 - Updating a number (e.g., "6 workflows" → "7 workflows")
 - Adding an item to a list or table
 - Fixing references to renamed/moved files
@@ -90,12 +85,11 @@ Action: [none | issue_only | issue_and_pr]
 ## Rules
 
 - **Your job is to ANALYZE and EDIT files** — the framework handles git, issues, and PRs
-- **Do NOT run git commands** — you don't have access to them
-- **Do NOT run gh commands** — the framework creates issues and PRs from your edits
 - **ALWAYS make the edits** to fix straightforward findings — don't just describe them
 - Focus on accuracy, not style
 - Do NOT rewrite documentation for stylistic preferences
 - Do NOT add documentation that wasn't there before (that's the developer's job)
-- Do NOT modify code files — only documentation files
 - Do NOT touch docs/archive/ except to move files INTO it
 - If you can fix it by editing the file, DO IT — the framework will detect your changes and create the PR
+
+Note: File scope is enforced by the runner. Changes outside your allowed paths are automatically reverted.

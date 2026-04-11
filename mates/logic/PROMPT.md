@@ -65,10 +65,10 @@ Action: [none | issue_only | issue_and_pr]
 ## Rules
 
 - **Your job is to ANALYZE and EDIT files** — the framework handles git, issues, and PRs
-- **Do NOT run git commands** — you don't have access to them
-- **Do NOT run gh commands** — the framework creates issues and PRs from your edits
 - **ALWAYS make the edits** for safe fixes (resolved TODOs, outdated comments)
 - Never change business logic — only code quality issues
 - Never create new constants or enums — only use existing ones
 - Never change method signatures or return types without full impact analysis
 - When replacing a hardcoded value, verify the constant has the exact same value
+
+Note: File scope is enforced by the runner. Changes outside your allowed paths are automatically reverted.

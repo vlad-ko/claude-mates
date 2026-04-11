@@ -2,4 +2,10 @@ name: docs
 description: Documentation quality and staleness reviewer
 model: haiku
 max_turns: 15
+commit_prefix: docs
 schedule: post-merge
+allowed_paths:
+  - "docs/**"
+  - "CLAUDE.md"
+  - "README.md"
+  - "*.md"
