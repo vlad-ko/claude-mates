@@ -55,7 +55,7 @@ jobs:
           MATES_ROOT: .claude-mates-framework
         run: bash .claude-mates-framework/runner.sh "dead-code" ".claude-mates-framework/mates/dead-code" ".claude-mates.yml"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mate-dead-code-${{ github.run_number }}

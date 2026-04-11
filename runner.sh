@@ -161,6 +161,10 @@ BRANCH_PREFIX="${LABEL_PREFIX}/${MATE_NAME}/$(date +%Y-%m-%d)"
 EXISTING_PR=$(gh pr list --search "head:${BRANCH_PREFIX}" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
 if [ -n "$EXISTING_PR" ]; then
   echo "Open PR #$EXISTING_PR already exists for ${BRANCH_PREFIX}* — skipping"
+  # Write summary even on early exit so the Job Summary panel isn't empty
+  if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+    echo "### Claude Mate: \`${MATE_NAME}\` — Skipped (existing PR #${EXISTING_PR})" >> "$GITHUB_STEP_SUMMARY"
+  fi
   exit 0
 fi
 
