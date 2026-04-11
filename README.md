@@ -1,7 +1,5 @@
 # Claude Mates
 
-[![Release](https://img.shields.io/github/v/release/vlad-ko/claude-mates)](https://github.com/vlad-ko/claude-mates/releases)
-
 Autonomous background agents for codebase maintenance, powered by Claude Code CLI.
 
 Inspired by [AI Daemons](https://ai-daemons.com/spec/) but built natively on Claude Code's skills, tools, and CLAUDE.md conventions.
