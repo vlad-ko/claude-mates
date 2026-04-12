@@ -2,6 +2,14 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.6.1] - 2026-04-12
+
+### Changed
+- chore: Opt mates.yml and security.yml into Node.js 24 for JavaScript actions
+- docs: Update CHANGELOG for v0.5.0 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.6.0...v0.6.1
+
 ## [0.5.0] - 2026-04-12
 
 ### Added
