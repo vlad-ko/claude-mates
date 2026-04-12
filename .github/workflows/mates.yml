@@ -16,6 +16,15 @@ on:
   workflow_dispatch: {}    # Manual dispatch runs all mates; the self-loop
                            # guard in runner.sh keeps unneeded runs cheap.
 
+# Opt into Node.js 24 for JavaScript actions. GitHub is forcing Node 24
+# as default on 2026-06-02 and removing Node 20 from runners on
+# 2026-09-16. Several transitive deps used by the action (actions/checkout,
+# actions/cache, actions/setup-node, etc.) still ship Node 20 at their
+# pinned SHAs — this env silences the deprecation warning today and
+# future-proofs the workflow.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   mate:
     runs-on: ubuntu-latest
