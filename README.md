@@ -94,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 100 }
-      - uses: vlad-ko/claude-mates@v0.3.0
+      - uses: vlad-ko/claude-mates@v0.6.1
         with:
           mate: ${{ matrix.mate }}
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -106,50 +106,77 @@ jobs:
 gh workflow run mates.yml
 ```
 
+### 6. (Recommended) Add the security mate as a required status check
+
+The security mate is a PR-scoped wrapper over [`anthropics/claude-code-security-review`](https://github.com/anthropics/claude-code-security-review). Running it is one thing; **blocking merge on it** is how you actually prevent vulnerabilities from landing on `main`.
+
+Add a PR-scoped workflow first (see [examples/README.md § The security mate is PR-scoped](examples/README.md#the-security-mate-is-pr-scoped-a-thin-wrapper-over-anthropics-scanner)), then promote its check to required:
+
+**Repo Settings → Branches → Branch protection rule for `main`:**
+
+1. Enable *"Require status checks to pass before merging"*
+2. Add **`security`** (the workflow's job name) to the required-checks list
+
+With this, merge is blocked until the scanner completes AND the PR addresses (or overrides) any findings. Recommended for production application repos where the cost of a vulnerability landing greatly exceeds the occasional false-positive friction.
+
+Escape hatch: repo admins can override the required check on a per-PR basis when the scanner is clearly wrong. Document that override path in your repo's `CLAUDE.md` / contributing docs.
+
+**Skip this for framework / library repos** where surface area is small (bash, YAML) and false-positive rate is high — advisory mode is fine.
+
 ## Action reference
 
 ```yaml
-- uses: vlad-ko/claude-mates@v0.3.0
+- uses: vlad-ko/claude-mates@v0.6.1
   with:
     mate: docs                   # required: one of docs, tests, dead-code, logic, security
     api-key: ${{ ... }}          # required: Anthropic API key
     config-path: .claude-mates.yml     # optional (default shown)
-    claude-cli-version: 2.1.97         # optional — pin for reproducibility
+    claude-cli-version: 2.1.97         # optional — pin for reproducibility (drift mates only)
 ```
 
 | Output | Values |
 |---|---|
-| `outcome` | `none` \| `issue` \| `pr` |
+| `outcome` | `none` \| `findings` \| `pr` |
 | `status` | `ok` \| `clean` \| `error` \| `empty` |
-| `issue-url` | URL of created issue, or empty |
-| `pr-url` | URL of created PR, or empty |
+| `issue-url` | Always empty (drift mates write to Job Summary; security mate posts inline PR comments) |
+| `pr-url` | URL of created PR, or empty (drift mates only) |
+| `findings-count` | Number of findings (security mate only; empty otherwise) |
 
 ## How it works
 
 ```
-schedule / workflow_dispatch
+schedule / pull_request / push / workflow_dispatch
         │
         ▼
 action.yml (composite)
-        │ ├─ installs @anthropic-ai/claude-code CLI (pinned)
-        │ └─ invokes runner.sh with MATE_NAME + MATES_ROOT = github.action_path
+        │ ├─ if mate==security → delegates to anthropics/claude-code-security-review (pinned SHA)
+        │ └─ else              → installs @anthropic-ai/claude-code CLI + invokes runner.sh
         ▼
-runner.sh
-        │ ├─ Phase 0: self-loop guard — skip if no human commits since last mate run
+runner.sh  (drift mates: docs/tests/dead-code/logic)
+        │ ├─ Phase 0: self-loop guards (event-agnostic — PR branch, HEAD commit patterns, CHANGELOG markers)
+        │ │           schedule: extra "no human work since last mate run" check
         │ ├─ Phase 1: Claude analyzes repo, edits files (tool-scoped via --allowedTools)
-        │ └─ Phase 2: shell validates, commits, opens branch/issue/PR
+        │ └─ Phase 2: shell validates, commits, opens branch/PR (findings-only → Job Summary, no issue)
         ▼
-$GITHUB_OUTPUT surfaces outcome + URLs for downstream steps
+$GITHUB_OUTPUT surfaces outcome + URLs + findings-count for downstream steps
 ```
+
+**Trigger shape is your choice:**
+- **Drift mates** (docs, tests, dead-code, logic): nightly cron is the default. Can also be invoked on `pull_request` — the framework prevents self-loops either way.
+- **Security mate**: always `pull_request` (enforced by the action). It's a pre-merge policy gate, not a drift scan.
+
+See [examples/README.md](examples/README.md) for both per-mate and matrix patterns, and the PR-trigger variants.
 
 ## Design principles
 
-1. **Mates never merge.** They propose. Humans decide.
-2. **Code enforces, prompts guide.** Hard rules (scope, protected paths, git isolation) live in `runner.sh`. Prompts guide behavior only.
+1. **Mates never merge.** They propose (PR or findings comment). Humans decide.
+2. **Code enforces, prompts guide.** Hard rules (scope, protected paths, git isolation, self-loop detection) live in `runner.sh`. Prompts guide behavior only.
 3. **No file copying.** The action IS the integration — no `.claude-mates-framework/` checkout, no per-release template bumps.
-4. **No self-loops.** runner.sh skips scheduled runs when no human commit has landed since the mate's last contribution (prevents echo-chamber review of the mate's own output).
-5. **Cost-bounded.** Per-mate model selection, per-mate max-turns, nightly cadence (no per-merge waste).
-6. **Observable.** Every run writes `/tmp/mate-*-summary.json` (uploaded as artifact) and populates GitHub Job Summary + action outputs.
+4. **No self-loops, across any trigger.** Framework-level guards fire on schedule, push, AND pull_request events. Mate-originated branches, automation-authored commits, and CHANGELOG PRs all skip cleanly. `workflow_dispatch` (manual) always proceeds.
+5. **No issue-tracker noise.** Findings without a concrete fix render to the workflow log + Job Summary panel, not auto-filed GitHub issues. Only human-filed issues are tracked long-term.
+6. **Specialized tools for specialized jobs.** The security mate is a thin wrapper over Anthropic's `claude-code-security-review` — battle-tested, diff-aware, FP-filtered. We don't re-invent; we integrate.
+7. **Cost-bounded.** Per-mate model selection, per-mate max-turns, `allowed_paths` scope cap, `--allowedTools` tool cap. Self-loop guard skips runs that would produce no signal.
+8. **Observable.** Every run writes `/tmp/mate-*-summary.json` (uploaded as artifact), populates GitHub Job Summary, and surfaces structured action outputs for downstream steps.
 
 ## Upgrading
 
