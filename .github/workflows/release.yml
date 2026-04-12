@@ -130,7 +130,60 @@ jobs:
             --title "$NEW_TAG" \
             --notes-file /tmp/release-notes.md
           echo "Released $NEW_TAG"
-          echo ""
-          echo "NOTE: CHANGELOG.md is human-maintained. Bots cannot push to"
-          echo "protected main. GitHub Releases serves as the authoritative"
-          echo "machine-readable changelog; CHANGELOG.md is a curated summary."
+
+      - name: Open CHANGELOG update PR
+        if: steps.bump.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
+          TODAY=$(date -u +%Y-%m-%d)
+          BRANCH="chore/changelog-${NEW_TAG}"
+
+          # If the branch already exists (retry scenario), skip gracefully
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists — skipping CHANGELOG PR creation"
+            exit 0
+          fi
+
+          # Build CHANGELOG entry from grouped release notes + version header
+          {
+            echo "## [${NEW_TAG#v}] - ${TODAY}"
+            echo ""
+            cat /tmp/release-notes.md
+          } > /tmp/changelog-entry.md
+
+          # Insert entry before the first existing "## [" heading
+          if grep -q "^## \[" CHANGELOG.md; then
+            awk -v entry_file=/tmp/changelog-entry.md '
+              /^## \[/ && !inserted {
+                while ((getline line < entry_file) > 0) print line
+                print ""
+                inserted=1
+              }
+              { print }
+            ' CHANGELOG.md > CHANGELOG.md.new
+          else
+            # No existing entries — append after header
+            cp CHANGELOG.md CHANGELOG.md.new
+            echo "" >> CHANGELOG.md.new
+            cat /tmp/changelog-entry.md >> CHANGELOG.md.new
+          fi
+          mv CHANGELOG.md.new CHANGELOG.md
+
+          # Commit to a new branch (not main) and open PR for developer review
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add CHANGELOG.md
+          git commit -m "docs: Update CHANGELOG for ${NEW_TAG} [skip release]"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "docs: Update CHANGELOG for ${NEW_TAG}" \
+            --body "Automated CHANGELOG update for release ${NEW_TAG}. Review and merge.\n\nRelease: https://github.com/${{ github.repository }}/releases/tag/${NEW_TAG}" \
+            --base main \
+            --head "$BRANCH" \
+            --label "chore"
+
+          echo "Opened CHANGELOG PR for review"

@@ -177,6 +177,14 @@ Include `[skip release]` in a commit message to skip the auto-release workflow.
 
 ## Versioning & CHANGELOG
 
-- **Auto-release workflow** (`release.yml`) creates tags and GitHub Releases automatically on merge to main based on conventional commit prefixes.
-- **GitHub Releases** are the authoritative machine-readable changelog — auto-generated and grouped by commit type (Added/Fixed/Changed).
-- **`CHANGELOG.md`** is a human-curated summary. Bots cannot update it automatically (branch protection prevents direct pushes to main). Update it manually as part of meaningful PRs when appropriate.
+The release workflow is fully automated but respects branch protection:
+
+1. **On merge to main** — `release.yml` reads conventional commit prefixes since the last tag
+2. **Determines version bump** — `feat:` → minor, `fix:`/`chore:`/`docs:` → patch
+3. **Creates tag + GitHub Release** — with grouped release notes (Added/Fixed/Changed)
+4. **Opens a CHANGELOG PR** — on branch `chore/changelog-v{N}`, contains the new entry
+5. **Developer reviews + merges** the CHANGELOG PR (normal review process, no branch-protection bypass)
+
+The CHANGELOG PR includes `[skip release]` in its commit message so its eventual merge doesn't trigger another release.
+
+Skip the entire release flow by including `[skip release]` in any merge commit message.
