@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.4.0] - 2026-04-12
+
+### Added
+- feat: Render findings to CI output instead of filing GitHub issues
+
+### Changed
+- docs: Update CHANGELOG for v0.3.0 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.3.0...v0.4.0
+
 ## [0.3.0] - 2026-04-12
 
 ### Added
