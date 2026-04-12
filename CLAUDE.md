@@ -214,7 +214,15 @@ The release workflow is fully automated but respects branch protection:
 4. **Opens a CHANGELOG PR** — on branch `chore/changelog-v{N}`, contains the new entry
 5. **Developer reviews + merges** the CHANGELOG PR (normal review process, no branch-protection bypass)
 
-The CHANGELOG PR includes `[skip release]` in its commit message so its eventual merge doesn't trigger another release.
+### CHANGELOG PR Loop Guard
+
+To prevent the CHANGELOG PR from re-triggering the release workflow (creating an infinite loop), the system uses **defense-in-depth**:
+
+1. **PR title marker** — The CHANGELOG PR title includes `[skip release]` (e.g., `docs: Update CHANGELOG for v0.2.5 [skip release]`). Squash-merge strategies inherit the PR title as the commit message.
+
+2. **Workflow condition guard** — The `release.yml` workflow condition also checks if the commit message starts with `"docs: Update CHANGELOG for v"` and skips the job if true. This handles edge cases where merge commits might not inherit the PR title or where the marker is accidentally dropped.
+
+Both mechanisms are needed: the first works for squash merges (which use PR title), the second handles merge commits and protects against accidental edits to the merge commit message.
 
 Skip the entire release flow by including `[skip release]` in any merge commit message.
 
