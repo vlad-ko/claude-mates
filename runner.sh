@@ -509,32 +509,37 @@ if [ -z "$ALL_CHANGED" ]; then
       OUTCOME="clean"
       ;;
     ok)
-      # Real findings — create issue or reference existing one
-      if [ -n "$EXISTING_ISSUE" ]; then
-        echo "Claude reported findings but made no file edits. Existing issue #${EXISTING_ISSUE} covers these."
-        ISSUE_NUM="$EXISTING_ISSUE"
-        OUTCOME="no_changes_existing_issue"
-      else
-        echo "Claude reported findings but made no file edits. Creating issue..."
-        ISSUE_TITLE="[${LABEL_PREFIX}:${MATE_NAME}] ${MATE_DESC} findings — $(date +%Y-%m-%d)"
-        ISSUE_BODY="$CLAUDE_RESULT"
+      # Claude reported findings but made no file edits. Previously this
+      # path filed a GitHub issue per run, which created low-signal noise
+      # in the issue tracker — findings without a concrete fix belong in
+      # the CI output where a human can skim, decide, and manually file
+      # an issue only if a tracked follow-up is warranted.
+      #
+      # Findings are rendered to:
+      #   1. stdout (workflow log) — full analysis, always visible
+      #   2. $GITHUB_STEP_SUMMARY — the Summary panel of the workflow run
+      #
+      # The uploaded /tmp/mate-*-summary.json artifact also captures the
+      # outcome for programmatic consumers.
+      echo ""
+      echo "=== ${MATE_DESC} — Analysis Summary ==="
+      printf '%s\n' "$CLAUDE_RESULT"
+      echo "=== End Analysis ==="
+      echo ""
 
-        ISSUE_URL=$(gh issue create \
-          --title "$ISSUE_TITLE" \
-          --label "$MATE_LABEL" \
-          --body "$ISSUE_BODY" 2>/tmp/mate-issue-error.txt || echo "")
-
-        if echo "$ISSUE_URL" | grep -q "^https://"; then
-          ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
-          ISSUE_URL_OUT="$ISSUE_URL"
-          EXISTING_ISSUE="$ISSUE_NUM"
-          OUTCOME="issue_created"
-        else
-          ISSUE_ERROR=$(cat /tmp/mate-issue-error.txt 2>/dev/null || echo "unknown error")
-          echo "Issue creation failed: $ISSUE_ERROR"
-          OUTCOME="findings_no_issue"
-        fi
+      if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        {
+          echo "## ${MATE_DESC} — Findings (no file edits)"
+          echo ""
+          echo "_Claude reported findings but made no file edits. Rendered here instead of filed as a GitHub issue — open one manually if a tracked follow-up is needed._"
+          echo ""
+          echo '```'
+          printf '%s\n' "$CLAUDE_RESULT"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
       fi
+
+      OUTCOME="findings_in_summary"
       ;;
   esac
 else
@@ -667,24 +672,32 @@ for f in changed:
     fi
 
     # ═════════════════════════════════════════════════════════════════════
-    # Create issue (if none exists) — title and body driven by mate config
+    # Analysis Summary — render Claude's findings to the CI log and the
+    # workflow's Job Summary panel. Historically this also filed a
+    # "companion" GitHub issue that the PR closed via `Fixes #N` — but
+    # the PR itself is the actionable artifact, and duplicating findings
+    # into an auto-issue is pure noise in the issue tracker.
+    #
+    # Issues are now reserved for things a human chooses to track
+    # (humans can still file an issue manually; the PR's `Fixes #N`
+    # link handles it if `EXISTING_ISSUE` was found from a human-filed
+    # issue with the mate label).
     # ═════════════════════════════════════════════════════════════════════
-    if [ -z "$EXISTING_ISSUE" ]; then
-      echo "Creating issue for findings..."
-      ISSUE_TITLE="[${LABEL_PREFIX}:${MATE_NAME}] ${MATE_DESC} — $(date +%Y-%m-%d)"
-      ISSUE_BODY="${CLAUDE_RESULT:-${MATE_DESC} analysis complete. See PR for details.}"
+    if [ -n "$CLAUDE_RESULT" ]; then
+      echo ""
+      echo "=== ${MATE_DESC} — Analysis Summary ==="
+      printf '%s\n' "$CLAUDE_RESULT"
+      echo "=== End Analysis ==="
+      echo ""
 
-      ISSUE_URL=$(gh issue create \
-        --title "$ISSUE_TITLE" \
-        --label "$MATE_LABEL" \
-        --body "$ISSUE_BODY" 2>/tmp/mate-issue-error.txt || echo "")
-
-      if echo "$ISSUE_URL" | grep -q "^https://"; then
-        ISSUE_NUM=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
-        ISSUE_URL_OUT="$ISSUE_URL"
-        EXISTING_ISSUE="$ISSUE_NUM"
-      else
-        echo "Issue creation failed: $(cat /tmp/mate-issue-error.txt 2>/dev/null || echo 'unknown error')"
+      if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        {
+          echo "## ${MATE_DESC} — Analysis (accompanies the PR below)"
+          echo ""
+          echo '```'
+          printf '%s\n' "$CLAUDE_RESULT"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
       fi
     fi
 
@@ -727,6 +740,7 @@ $(printf '%s\n' "$ALL_CHANGED" | while IFS= read -r f; do [ -n "$f" ] && echo "-
 $([ "$VIOLATIONS_FOUND" -gt 0 ] && echo "
 ### Validation Notes
 $VIOLATIONS_FOUND file(s) were reverted by the runner for violating scope or protected path rules. See CI logs for details." || echo "")
+$([ -n "$CLAUDE_RESULT" ] && printf '\n### Analysis\n\n%s\n' "$CLAUDE_RESULT" || echo "")
 
 ---
 *Generated by [Claude Mates](https://github.com/vlad-ko/claude-mates)*"
@@ -743,11 +757,11 @@ $VIOLATIONS_FOUND file(s) were reverted by the runner for violating scope or pro
       PR_NUM=$(echo "$PR_URL" | grep -o '[0-9]*$')
       PR_URL_OUT="$PR_URL"
       FILES_CHANGED_COUNT=$(echo "$ALL_CHANGED" | wc -l | tr -d ' ')
-      OUTCOME="issue_and_pr"
+      OUTCOME="pr_created"
     else
       PR_ERROR=$(cat /tmp/mate-pr-error.txt 2>/dev/null || echo "unknown error")
-      echo "PR creation failed: $PR_ERROR"
-      OUTCOME="issue_only_pr_failed"
+      echo "::error::PR creation failed: $PR_ERROR"
+      OUTCOME="pr_failed"
     fi
   fi
 fi
@@ -793,36 +807,26 @@ echo "║  Violations: ${VIOLATIONS_FOUND} files reverted"
 echo "╠══════════════════════════════════════════════════════════╣"
 
 case "$OUTCOME" in
-  issue_and_pr)
-    echo "║  RESULT:   Issue + PR created"
-    echo "║  Issue:    #${ISSUE_NUM} ${ISSUE_URL_OUT}"
+  pr_created)
+    echo "║  RESULT:   PR opened for human review"
     echo "║  PR:       #${PR_NUM} ${PR_URL_OUT}"
+    [ -n "$EXISTING_ISSUE" ] && echo "║  Linked:   #${EXISTING_ISSUE} (will auto-close on merge via Fixes)"
     echo "║  Files:    ${FILES_CHANGED_COUNT} changed"
     ;;
-  issue_created)
-    echo "║  RESULT:   Issue created (findings need human review)"
-    echo "║  Issue:    #${ISSUE_NUM} ${ISSUE_URL_OUT}"
-    echo "║  PR:       Not created — Claude reported findings but didn't edit files"
+  findings_in_summary)
+    echo "║  RESULT:   Findings rendered to Job Summary (no file edits)"
+    echo "║  Issue:    Not created — see Analysis Summary above / in Job Summary panel"
+    echo "║  PR:       Not created — no file edits to commit"
     ;;
-  no_changes_existing_issue)
-    echo "║  RESULT:   Existing issue still open, no new edits"
-    echo "║  Issue:    #${ISSUE_NUM} (existing)"
-    echo "║  PR:       Not created — no new file edits"
-    ;;
-  findings_no_issue)
-    echo "║  RESULT:   Findings reported (issue creation skipped)"
-    echo "║  Issue:    Not created — check Claude output above"
-    echo "║  PR:       Not created"
+  pr_failed)
+    echo "║  RESULT:   Edits pushed to branch, but PR creation failed"
+    echo "║  Branch:   ${BRANCH_NAME} (open PR manually if desired)"
+    echo "║  PR:       Not created — ${PR_ERROR:-see logs above}"
     ;;
   error)
     echo "║  RESULT:   Error — Claude API/CLI failure"
     echo "║  Issue:    Not created (API error, not a finding)"
     echo "║  PR:       Not created"
-    ;;
-  issue_only_pr_failed)
-    echo "║  RESULT:   Changes pushed, PR creation failed"
-    echo "║  Issue:    #${ISSUE_NUM}"
-    echo "║  PR:       Not created — ${PR_ERROR:-see logs above}"
     ;;
   violations_only)
     echo "║  RESULT:   All changes reverted (scope/protected violations)"
@@ -886,16 +890,21 @@ JSONEOF
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Action outputs — surface a simplified outcome to callers via $GITHUB_OUTPUT.
-# Internal OUTCOME has many values; the composite action contract is just
-#   outcome ∈ {none, issue, pr}  and  status ∈ {ok, clean, error, empty}
-# Downstream workflow steps can branch on these.
+# Internal OUTCOME has several values; the composite action contract is:
+#   outcome ∈ {none, findings, pr}
+#   status  ∈ {ok, clean, error, empty}
+#
+#   none      — nothing to report (clean run, error, empty, violations-only)
+#   findings  — Claude reported findings but made no file edits; rendered to
+#               the Job Summary and workflow log (no GitHub issue filed)
+#   pr        — a PR was opened (or attempted; see pr-url for success)
 # ═══════════════════════════════════════════════════════════════════════════
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   case "$OUTCOME" in
-    issue_and_pr|issue_only_pr_failed)
+    pr_created|pr_failed)
       ACTION_OUTCOME="pr" ;;
-    issue_created|no_changes_existing_issue|violations_only)
-      ACTION_OUTCOME="issue" ;;
+    findings_in_summary)
+      ACTION_OUTCOME="findings" ;;
     *)
       ACTION_OUTCOME="none" ;;
   esac

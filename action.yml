@@ -23,13 +23,23 @@ inputs:
 
 outputs:
   outcome:
-    description: 'What the mate produced on this run. One of: none | issue | pr.'
+    description: >-
+      What the mate produced on this run. One of:
+      none (clean/error/empty/violations-only),
+      findings (Claude reported findings but made no file edits — rendered
+        to the Job Summary and workflow log, no GitHub issue filed),
+      pr (a PR was opened, or attempted — check pr-url for success).
     value: ${{ steps.run.outputs.outcome }}
   status:
     description: 'Classification of Claude''s output. One of: ok | clean | error | empty.'
     value: ${{ steps.run.outputs.status }}
   issue-url:
-    description: 'URL of the GitHub issue created by this run (empty if no issue).'
+    description: >-
+      URL of a GitHub issue linked to this run. Reserved for forward compat;
+      currently always empty since v0.3.x — the mate no longer auto-files
+      issues (findings go to the Job Summary instead). A human-filed issue
+      matching the mate label is auto-linked in the PR via Fixes #N but is
+      not echoed here.
     value: ${{ steps.run.outputs.issue-url }}
   pr-url:
     description: 'URL of the GitHub PR created by this run (empty if no PR).'
