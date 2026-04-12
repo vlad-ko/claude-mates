@@ -20,6 +20,15 @@ concurrency:
   group: security-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Opt into Node.js 24 for JavaScript actions. The Anthropic security scanner
+# and its transitive deps (actions/checkout, actions/cache, setup-node,
+# setup-python, upload-artifact) still ship Node 20 at their pinned SHAs.
+# GitHub forces Node 24 default on 2026-06-02 and removes Node 20 on
+# 2026-09-16 — this env silences the deprecation warning today and
+# future-proofs the workflow.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   security:
     runs-on: ubuntu-latest
