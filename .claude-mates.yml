@@ -17,9 +17,14 @@ mates:
 
   security:
     enabled: true
-    model: haiku  # Haiku for dogfooding (Sonnet for production repos)
-    max_turns: 10
-    schedule: post-merge
+    # Security mate is a thin wrapper over anthropics/claude-code-security-review.
+    # It runs on pull_request (not nightly) — see .github/workflows/security.yml.
+    # `model` / `max_turns` above do not apply; the scanner picks its own model
+    # (Opus 4.1 by default).
+    exclude_directories:
+      - .github/workflows/
+      - examples/
+      - docs/archive/
 
   dead-code:
     enabled: true

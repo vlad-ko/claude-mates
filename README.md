@@ -8,15 +8,24 @@ Inspired by [AI Daemons](https://ai-daemons.com/spec/), built on [Claude Code](h
 
 ## The mates
 
-| Mate | Purpose | Default model |
-|---|---|---|
-| `docs` | Documentation quality, staleness, drift | Haiku |
-| `tests` | Outdated/redundant tests, weak assertions | Haiku |
-| `dead-code` | Unused symbols, orphaned files | Haiku |
-| `logic` | TODOs, deprecated APIs, hardcoded values | Haiku |
-| `security` | Security architecture review (for PR-scoped review see [examples/README.md](examples/README.md)) | Sonnet |
+Two classes:
 
-All mates are "drift detection" — they find issues that accumulate over time, so they run on a nightly cron by default.
+**Drift mates** — nightly state-query over HEAD. Each is a Claude Code prompt tuned for one concern.
+
+| Mate | Purpose | Default model | Trigger |
+|---|---|---|---|
+| `docs` | Documentation quality, staleness, drift | Haiku | nightly |
+| `tests` | Outdated/redundant tests, weak assertions | Haiku | nightly |
+| `dead-code` | Unused symbols, orphaned files | Haiku | nightly |
+| `logic` | TODOs, deprecated APIs, hardcoded values | Haiku | nightly |
+
+**Policy gate** — PR-scoped, wraps a specialized tool.
+
+| Mate | Purpose | Engine | Trigger |
+|---|---|---|---|
+| `security` | Security review, diff-aware, inline PR comments | [`anthropics/claude-code-security-review`](https://github.com/anthropics/claude-code-security-review) (Opus 4.1 default) | `pull_request` only |
+
+The security mate is a thin wrapper over Anthropic's specialized scanner: you keep the `mate: security` interface, the scanner does the analysis. See [examples/README.md](examples/README.md) for the PR-scoped invocation pattern.
 
 ## Quick start
 

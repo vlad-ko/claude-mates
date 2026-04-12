@@ -1,0 +1,50 @@
+# Security mate dogfood — runs on every PR to claude-mates.
+#
+# The security mate is a thin wrapper over anthropics/claude-code-security-review.
+# Unlike the drift mates (docs, tests, dead-code, logic) which run nightly as a
+# state-query over HEAD, security review is a PR-scoped policy gate: the scanner
+# analyzes the diff and posts line-accurate review comments on the actual
+# vulnerable code BEFORE it lands on main.
+#
+# Uses `uses: ./` — same code path external adopters run via
+# `uses: vlad-ko/claude-mates@vX.Y.Z`. Breaks-for-us = breaks-for-them.
+
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # One security review per PR at a time; new pushes cancel the stale run.
+  group: security-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25  # Allow headroom over the scanner's default 20m.
+
+    permissions:
+      pull-requests: write   # For posting line-accurate review comments
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Review the actual proposed code, not the merge commit
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2       # Need parent to diff against
+
+      - id: mate
+        uses: ./
+        with:
+          mate: security
+          api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
+
+      - name: Log outcome
+        if: always()
+        run: |
+          echo "Outcome:  ${{ steps.mate.outputs.outcome }}"
+          echo "Status:   ${{ steps.mate.outputs.status }}"
+          echo "Findings: ${{ steps.mate.outputs.findings-count || 0 }}"
