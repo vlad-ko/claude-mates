@@ -29,7 +29,7 @@ Phase 1 (Claude):  Analyze and edit files
                    Guided by PROMPT.md (behavioral instructions)
 
 Phase 1.5 (Shell): Classify Claude output quality
-                   Detect API errors, empty results, and clean runs
+                   Detect API errors, empty results, max_turns, permission denials, parse errors
                    Set CLAUDE_STATUS (error, empty, clean, ok)
                    Decide whether to proceed to Phase 2 or exit cleanly
 
@@ -39,6 +39,12 @@ Phase 2 (Shell):   Validate changes against hard rules
 ```
 
 Phase 1 is the LLM's sandbox. Phase 1.5 detects output quality and failures before any git operations. Phase 2 is the guardrail. Never rely on Phase 1 compliance for safety — always verify in Phase 1.5 and Phase 2.
+
+**Phase 1.5 Classification Details:**
+- **error**: CLI returned API errors (rate_limit_error, server_error, authentication_error, etc.) or structured CLI error metadata
+- **empty**: Claude output parsing failed, max_turns reached, or permission denials occurred
+- **clean**: Changes detected but no findings (expected for clean runs)
+- **ok**: Findings detected and issue/PR will be created
 
 ### Mate Configuration (mate.yml)
 
@@ -90,6 +96,15 @@ mates:
 
 Code-enforced in Phase 2: the runner reads project config and applies overrides before validating Claude's changes.
 
+### Consumer Repo Integration (MATES_ROOT)
+
+When consumer repos check out the framework as a subdirectory (e.g., `.claude-mates-framework/`), the runner filters out framework files to prevent phantom PRs. This is controlled via the `MATES_ROOT` environment variable:
+
+- `MATES_ROOT="."` — Framework checked out at repo root (default for this repo)
+- `MATES_ROOT="./.claude-mates-framework"` — Framework is a subdirectory (typical for consumer repos)
+
+Phase 2 filters untracked files under `MATES_ROOT` so that framework changes don't trigger false mate runs. The filtering is path-normalized and handles both relative and absolute paths.
+
 ## File Structure
 
 ```
@@ -110,6 +125,20 @@ claude-mates/
   examples/           # Example workflow files for consumers
   .github/workflows/  # CI workflows for this repo (self-dogfooding)
 ```
+
+## PR and Issue Creation
+
+### PR Title Format
+
+PRs created by mates follow conventional commit conventions for compatibility with release automation and pr-title-check workflows:
+
+```
+<prefix>: <description> [<label>:<mate>]
+```
+
+Example: `docs: Fix stale API reference and outdated version numbers [claude-mate:docs]`
+
+The `prefix` comes from the mate's `commit_prefix` in mate.yml. This ensures the PR title passes consumer repos' conventional commit validation and contributes correctly to semantic versioning.
 
 ## Deny Rules
 
