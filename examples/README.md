@@ -44,7 +44,7 @@ jobs:
           # to find the last human-authored commit. 100 is a safe default.
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.3.0
+      - uses: vlad-ko/claude-mates@v0.6.1
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -87,7 +87,7 @@ jobs:
         with:
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.3.0
+      - uses: vlad-ko/claude-mates@v0.6.1
         with:
           mate: ${{ matrix.mate }}
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -111,7 +111,7 @@ The action surfaces five outputs so downstream steps can branch on what the mate
 
 ```yaml
       - id: mate
-        uses: vlad-ko/claude-mates@v0.3.0
+        uses: vlad-ko/claude-mates@v0.6.1
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -154,7 +154,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
-      - uses: vlad-ko/claude-mates@v0.5.0
+      - uses: vlad-ko/claude-mates@v0.6.1
         with:
           mate: security
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -229,7 +229,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 100
-      - uses: vlad-ko/claude-mates@v0.5.0   # or later
+      - uses: vlad-ko/claude-mates@v0.6.1   # or later
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
