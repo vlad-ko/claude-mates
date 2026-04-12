@@ -183,6 +183,15 @@ fi
 
 echo "Phase 0: event=${GITHUB_EVENT_NAME:-unknown}, TRIGGER_CONTEXT enriched (since=${LAST_MATE_COMMIT:-<none>}, changed_files=${CHANGED_FILES_COUNT}, truncated=${CHANGED_FILES_TRUNCATED})"
 
+# ─── Test mode: exit after Phase 0 completes ────────────────────────────────
+# Used by tests/runner_phase0_test.sh to exercise the self-loop guard
+# deterministically without invoking the Claude CLI or gh. Not intended for
+# production use — no code path other than the test harness sets this.
+if [ "${MATE_TEST_MODE:-}" = "phase0-only" ]; then
+  echo "Phase 0 complete — exiting in MATE_TEST_MODE=phase0-only"
+  exit 0
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION — Read all mate settings from mate.yml and project config
 # Hard rules are read here, enforced in Phase 2.
