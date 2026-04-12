@@ -167,8 +167,16 @@ bash dispatcher.sh
 
 ## Commit Conventions
 
-- `feat:` — New mate or major feature
-- `fix:` — Bug fix in framework
-- `chore:` — Config, CI, maintenance
-- `docs:` — Documentation only
+- `feat:` — New mate or major feature (triggers minor version bump)
+- `fix:` — Bug fix in framework (triggers patch version bump)
+- `chore:` — Config, CI, maintenance (triggers patch version bump)
+- `docs:` — Documentation only (triggers patch version bump)
 - Prefix scope: `fix(runner):`, `feat(mate-security):`
+
+Include `[skip release]` in a commit message to skip the auto-release workflow.
+
+## Versioning & CHANGELOG
+
+- **Auto-release workflow** (`release.yml`) creates tags and GitHub Releases automatically on merge to main based on conventional commit prefixes.
+- **GitHub Releases** are the authoritative machine-readable changelog — auto-generated and grouped by commit type (Added/Fixed/Changed).
+- **`CHANGELOG.md`** is a human-curated summary. Bots cannot update it automatically (branch protection prevents direct pushes to main). Update it manually as part of meaningful PRs when appropriate.

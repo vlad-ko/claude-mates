@@ -85,76 +85,38 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "Version bump: $BUMP ($LATEST → $NEW_TAG)"
 
-      - name: Generate release notes
-        id: notes
+      - name: Build grouped release notes
         if: steps.bump.outputs.skip != 'true'
         run: |
+          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
           LATEST="${{ steps.latest.outputs.tag }}"
-          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
 
-          # Build release notes from commits
-          NOTES="## What's Changed\n\n"
-          if git rev-parse "$LATEST" >/dev/null 2>&1; then
-            NOTES+=$(git log "${LATEST}..HEAD" --oneline --no-merges | sed 's/^[a-f0-9]* /- /')
-          else
-            NOTES+=$(git log --oneline --no-merges -10 | sed 's/^[a-f0-9]* /- /')
-          fi
-          NOTES+="\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LATEST}...${NEW_TAG}"
-
-          # Write to file to avoid quoting issues
-          printf "%b" "$NOTES" > /tmp/release-notes.md
-          cat /tmp/release-notes.md
-
-      - name: Update CHANGELOG.md
-        if: steps.bump.outputs.skip != 'true'
-        run: |
-          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
-          TODAY=$(date -u +%Y-%m-%d)
-
-          # Build CHANGELOG entry from commits grouped by type
-          ENTRY="## [${NEW_TAG#v}] - ${TODAY}\n\n"
-
-          # Group commits by conventional prefix
+          # Group commits by conventional prefix into GitHub Release body
           FEATS=$(grep -iE "^[a-f0-9]+ feat(\(|:)" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
           FIXES=$(grep -iE "^[a-f0-9]+ fix(\(|:)" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
           OTHER=$(grep -iE "^[a-f0-9]+ (chore|docs|refactor|style|perf|test)(\(|:)" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
 
-          if [ -n "$FEATS" ]; then
-            ENTRY+="### Added\n"
-            while IFS= read -r line; do [ -n "$line" ] && ENTRY+="- $line\n"; done <<< "$FEATS"
-            ENTRY+="\n"
-          fi
-          if [ -n "$FIXES" ]; then
-            ENTRY+="### Fixed\n"
-            while IFS= read -r line; do [ -n "$line" ] && ENTRY+="- $line\n"; done <<< "$FIXES"
-            ENTRY+="\n"
-          fi
-          if [ -n "$OTHER" ]; then
-            ENTRY+="### Changed\n"
-            while IFS= read -r line; do [ -n "$line" ] && ENTRY+="- $line\n"; done <<< "$OTHER"
-            ENTRY+="\n"
-          fi
+          {
+            if [ -n "$FEATS" ]; then
+              echo "### Added"
+              while IFS= read -r line; do [ -n "$line" ] && echo "- $line"; done <<< "$FEATS"
+              echo ""
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "### Fixed"
+              while IFS= read -r line; do [ -n "$line" ] && echo "- $line"; done <<< "$FIXES"
+              echo ""
+            fi
+            if [ -n "$OTHER" ]; then
+              echo "### Changed"
+              while IFS= read -r line; do [ -n "$line" ] && echo "- $line"; done <<< "$OTHER"
+              echo ""
+            fi
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LATEST}...${NEW_TAG}"
+          } > /tmp/release-notes.md
 
-          # Insert after the header (first "## [" line or after first 3 lines if no existing entries)
-          if grep -q "^## \[" CHANGELOG.md; then
-            # Insert before the first existing entry
-            awk -v entry="$(printf "%b" "$ENTRY")" '
-              /^## \[/ && !inserted { print entry; inserted=1 }
-              { print }
-            ' CHANGELOG.md > CHANGELOG.md.new
-          else
-            # No existing entries — append after header
-            cp CHANGELOG.md CHANGELOG.md.new
-            printf "\n%b" "$ENTRY" >> CHANGELOG.md.new
-          fi
-          mv CHANGELOG.md.new CHANGELOG.md
-
-          # Commit the CHANGELOG update back to main
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          git commit -m "docs: Update CHANGELOG for ${NEW_TAG} [skip release]"
-          git push origin main
+          echo "─── Release notes for $NEW_TAG ───"
+          cat /tmp/release-notes.md
 
       - name: Create tag and release
         if: steps.bump.outputs.skip != 'true'
@@ -162,10 +124,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           NEW_TAG="${{ steps.bump.outputs.new_tag }}"
-          # Tag the CHANGELOG commit so the tag includes the CHANGELOG update
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
           gh release create "$NEW_TAG" \
             --title "$NEW_TAG" \
             --notes-file /tmp/release-notes.md
           echo "Released $NEW_TAG"
+          echo ""
+          echo "NOTE: CHANGELOG.md is human-maintained. Bots cannot push to"
+          echo "protected main. GitHub Releases serves as the authoritative"
+          echo "machine-readable changelog; CHANGELOG.md is a curated summary."
