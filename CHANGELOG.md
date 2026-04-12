@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.2.0] - 2026-04-11
+
+### Added
+- **Automated release workflow** — `release.yml` auto-tags and publishes on merge to main. Reads conventional commit prefixes to determine version bump (`feat:` → minor, `fix:`/`chore:`/`docs:` → patch). Skip with `[skip release]`. ([#35])
+
+### Changed
+- Future releases are tagged automatically — no more manual `git tag` + `gh release create`.
+
+[#35]: https://github.com/vlad-ko/claude-mates/pull/35
+
 ## [0.1.1] - 2026-04-11
 
 ### Fixed
