@@ -217,3 +217,11 @@ The release workflow is fully automated but respects branch protection:
 The CHANGELOG PR includes `[skip release]` in its commit message so its eventual merge doesn't trigger another release.
 
 Skip the entire release flow by including `[skip release]` in any merge commit message.
+
+### Release Workflow Permissions
+
+The `release.yml` workflow requires two GitHub Actions permissions:
+- **`contents: write`** — for pushing tags and creating GitHub Releases
+- **`pull-requests: write`** — for opening the automated CHANGELOG PR
+
+Both are required. The workflow will fail at the CHANGELOG PR step with "Resource not accessible by integration" if `pull-requests: write` is missing.
