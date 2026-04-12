@@ -2,6 +2,18 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.7.0] - 2026-04-12
+
+### Added
+- feat: Security aftermath — open tracked issue when PR merges with findings
+
+### Changed
+- docs: Update CHANGELOG for v0.6.4 [skip release]
+- docs: Update CHANGELOG for v0.6.3 [skip release]
+- docs: Update CHANGELOG for v0.6.2 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.6.4...v0.7.0
+
 ## [0.6.4] - 2026-04-12
 
 ### Fixed
