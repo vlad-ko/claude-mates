@@ -2,6 +2,13 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.6.0] - 2026-04-12
+
+### Added
+- feat: PR-trigger safety for drift mates (event-agnostic self-loop guards)
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.5.0...v0.6.0
+
 ## [0.4.0] - 2026-04-12
 
 ### Added
