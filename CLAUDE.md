@@ -167,8 +167,24 @@ bash dispatcher.sh
 
 ## Commit Conventions
 
-- `feat:` — New mate or major feature
-- `fix:` — Bug fix in framework
-- `chore:` — Config, CI, maintenance
-- `docs:` — Documentation only
+- `feat:` — New mate or major feature (triggers minor version bump)
+- `fix:` — Bug fix in framework (triggers patch version bump)
+- `chore:` — Config, CI, maintenance (triggers patch version bump)
+- `docs:` — Documentation only (triggers patch version bump)
 - Prefix scope: `fix(runner):`, `feat(mate-security):`
+
+Include `[skip release]` in a commit message to skip the auto-release workflow.
+
+## Versioning & CHANGELOG
+
+The release workflow is fully automated but respects branch protection:
+
+1. **On merge to main** — `release.yml` reads conventional commit prefixes since the last tag
+2. **Determines version bump** — `feat:` → minor, `fix:`/`chore:`/`docs:` → patch
+3. **Creates tag + GitHub Release** — with grouped release notes (Added/Fixed/Changed)
+4. **Opens a CHANGELOG PR** — on branch `chore/changelog-v{N}`, contains the new entry
+5. **Developer reviews + merges** the CHANGELOG PR (normal review process, no branch-protection bypass)
+
+The CHANGELOG PR includes `[skip release]` in its commit message so its eventual merge doesn't trigger another release.
+
+Skip the entire release flow by including `[skip release]` in any merge commit message.
