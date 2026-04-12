@@ -2,6 +2,13 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.2.6] - 2026-04-12
+
+### Fixed
+- fix: Prevent CHANGELOG PR from re-triggering release workflow
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.2.5...v0.2.6
+
 ## [0.2.4] - 2026-04-12
 
 ### Changed
