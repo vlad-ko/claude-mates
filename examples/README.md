@@ -99,14 +99,15 @@ Each matrix leg is an independent job — separate log stream, separate concurre
 
 ## Reacting to the action's outputs
 
-The action surfaces four outputs so downstream steps can branch on what the mate produced:
+The action surfaces five outputs so downstream steps can branch on what the mate produced:
 
 | Output | Values |
 |---|---|
-| `outcome` | `none` \| `issue` \| `pr` |
+| `outcome` | `none` \| `findings` \| `pr` |
 | `status` | `ok` \| `clean` \| `error` \| `empty` |
-| `issue-url` | URL of created issue, or empty |
-| `pr-url` | URL of created PR, or empty |
+| `issue-url` | Always empty (drift mates render to Job Summary; security mate posts inline PR comments) |
+| `pr-url` | URL of created PR, or empty (drift mates only) |
+| `findings-count` | Number of findings reported (security mate only) |
 
 ```yaml
       - id: mate
@@ -125,26 +126,71 @@ The action surfaces four outputs so downstream steps can branch on what the mate
 
 ---
 
-## PR-scoped runs
+## The security mate is PR-scoped (a thin wrapper over Anthropic's scanner)
 
-The drift mates (docs, tests, dead-code, logic) are designed for nightly batching — they find issues that accumulate over time. For **policy gates that must run pre-merge** (e.g., security review), use Anthropic's specialized PR-scoped action instead:
+Unlike the drift mates, `mate: security` is a **pre-merge policy gate**, not a nightly scan. Internally, the action delegates to [`anthropics/claude-code-security-review`](https://github.com/anthropics/claude-code-security-review) pinned to a specific commit — battle-tested by Anthropic, with Opus 4.1 as default, diff-aware analysis, false-positive filtering tuned for security, and line-accurate inline PR comments.
+
+**Invoke it from a `pull_request` workflow, NOT from the nightly matrix.** The action fails early if invoked outside a `pull_request` event.
 
 ```yaml
+name: Security
 on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: security-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   security:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
-      pull-requests: write
+      pull-requests: write   # For inline review comments
       contents: read
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
+      - uses: vlad-ko/claude-mates@v0.5.0
+        with:
+          mate: security
+          api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
+```
+
+Optional config in `.claude-mates.yml`:
+
+```yaml
+mates:
+  security:
+    exclude_directories:
+      - vendor
+      - node_modules
+      - public/build
+      - storage
+```
+
+If omitted, a sensible default exclude list is applied.
+
+### Why is security a wrapper (and not a generic claude-mate)?
+
+Earlier versions of this framework had `mates/security/PROMPT.md` — a generic Claude Code prompt for security review. That was removed in v0.5.0 because Anthropic publishes a specialized action that's strictly better for this concern:
+
+- Diff-aware (only analyzes changed files, not the entire repo every run)
+- False-positive filtering tuned specifically for security findings
+- Line-accurate inline PR comments on the exact vulnerable line
+- Uses Opus 4.1 by default for deeper semantic analysis
+- Maintained by Anthropic — stays current with model upgrades
+
+Wrapping it preserves the familiar `mate: security` interface while using the well-tested tool underneath. No prompts to tweak, no re-invention.
+
+### Direct adoption (without claude-mates)
+
+If you prefer to use Anthropic's action directly without going through claude-mates, that works too — the wrapper adds zero functionality over the raw action, just the unified `mate: X` surface. Example:
+
+```yaml
       - uses: anthropics/claude-code-security-review@<pinned-sha>
         with:
           claude-api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}

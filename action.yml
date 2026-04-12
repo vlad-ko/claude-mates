@@ -10,14 +10,14 @@ inputs:
     description: 'Which mate to run. One of: docs, tests, dead-code, logic, security. See the repo README for the full list.'
     required: true
   api-key:
-    description: 'Anthropic API key (the CLAUDE_MATES_API_KEY secret). Passed to the Claude Code CLI as ANTHROPIC_API_KEY.'
+    description: 'Anthropic API key (the CLAUDE_MATES_API_KEY secret). Passed to the Claude CLI (generic mates) or the Anthropic security scanner (security mate) as ANTHROPIC_API_KEY / claude-api-key.'
     required: true
   config-path:
     description: 'Path to .claude-mates.yml inside the consumer workspace. Used for per-mate enable/disable, model overrides, scope, and deny rules.'
     required: false
     default: '.claude-mates.yml'
   claude-cli-version:
-    description: 'Version of @anthropic-ai/claude-code to install. Pin explicitly for reproducible runs.'
+    description: 'Version of @anthropic-ai/claude-code to install (drift mates only; ignored for security).'
     required: false
     default: '2.1.97'
 
@@ -26,48 +26,133 @@ outputs:
     description: >-
       What the mate produced on this run. One of:
       none (clean/error/empty/violations-only),
-      findings (Claude reported findings but made no file edits — rendered
-        to the Job Summary and workflow log, no GitHub issue filed),
-      pr (a PR was opened, or attempted — check pr-url for success).
-    value: ${{ steps.run.outputs.outcome }}
+      findings (drift mates: Claude reported findings but made no file edits, rendered to the Job Summary;
+               security mate: scanner found one or more security findings, posted as inline PR comments),
+      pr (drift mate: a PR was opened — check pr-url for success).
+    value: ${{ steps.security-outputs.outputs.outcome || steps.run.outputs.outcome }}
   status:
-    description: 'Classification of Claude''s output. One of: ok | clean | error | empty.'
-    value: ${{ steps.run.outputs.status }}
+    description: 'Classification of Claude''s output (drift mates). Security mate always emits ok when the scanner completes.'
+    value: ${{ steps.security-outputs.outputs.status || steps.run.outputs.status }}
   issue-url:
     description: >-
-      URL of a GitHub issue linked to this run. Reserved for forward compat;
-      currently always empty since v0.3.x — the mate no longer auto-files
-      issues (findings go to the Job Summary instead). A human-filed issue
-      matching the mate label is auto-linked in the PR via Fixes #N but is
-      not echoed here.
-    value: ${{ steps.run.outputs.issue-url }}
+      URL of a GitHub issue linked to this run. Always empty: drift mates no longer auto-file issues
+      (findings go to the Job Summary), and the security mate posts inline PR comments rather than issues.
+    value: ${{ steps.security-outputs.outputs.issue-url || steps.run.outputs.issue-url }}
   pr-url:
-    description: 'URL of the GitHub PR created by this run (empty if no PR).'
-    value: ${{ steps.run.outputs.pr-url }}
+    description: 'URL of the GitHub PR created by this run (drift mates only; empty for security mate).'
+    value: ${{ steps.security-outputs.outputs.pr-url || steps.run.outputs.pr-url }}
+  findings-count:
+    description: 'Number of findings reported (security mate only; empty for other mates).'
+    value: ${{ steps.sec-run.outputs.findings-count }}
 
 runs:
   using: 'composite'
+
+  # The steps below branch on inputs.mate:
+  #
+  #   mate == 'security' → delegate to Anthropic's specialized security-review
+  #     action (anthropics/claude-code-security-review). We pin the action to a
+  #     specific commit SHA; config is pulled from .claude-mates.yml so adopters
+  #     keep a single config surface. The security mate REQUIRES a pull_request
+  #     event — it's a pre-merge policy gate, not a nightly drift scan.
+  #
+  #   mate != 'security' → install the Claude CLI and run the generic drift
+  #     mate via runner.sh. This is the existing v0.4.x path for docs, tests,
+  #     dead-code, and logic mates.
+  #
+  # Either branch produces outputs consumable via a single contract; the
+  # outputs: block above uses `A || B` fallback to pick the right branch's data.
+
   steps:
+    # ─── Security mate: validate + parse config + invoke Anthropic scanner ─
+    - name: Validate event for security mate
+      if: inputs.mate == 'security'
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" != "pull_request" ]; then
+          echo "::error::mate: security requires a pull_request event (received: ${{ github.event_name }}). Invoke it from a PR-scoped workflow (on: pull_request), not a schedule or push."
+          exit 1
+        fi
+
+    - name: Parse security config from .claude-mates.yml
+      id: sec-config
+      if: inputs.mate == 'security'
+      shell: bash
+      run: |
+        # Read security.exclude_directories from the adopter's config. Fall
+        # back to a sensible default of infrastructure-adjacent paths so
+        # the scanner doesn't waste cycles on vendor/build artifacts.
+        EXCLUDE=$(python3 -c "
+        import yaml, sys
+        try:
+            with open('${{ inputs.config-path }}') as f:
+                cfg = yaml.safe_load(f) or {}
+            paths = (cfg.get('mates', {}).get('security', {}) or {}).get('exclude_directories', []) or []
+            print(','.join(str(p) for p in paths))
+        except FileNotFoundError:
+            print('')
+        except Exception as e:
+            print('', file=sys.stderr)
+            print(f'::warning::Failed to parse ${{ inputs.config-path }}: {e}', file=sys.stderr)
+        " 2>/dev/null || echo "")
+
+        if [ -z "$EXCLUDE" ]; then
+          EXCLUDE="vendor,node_modules,public/build,storage,bootstrap/cache,docs/archive"
+          echo "Using default exclude-directories: $EXCLUDE"
+        else
+          echo "Using configured exclude-directories: $EXCLUDE"
+        fi
+        echo "exclude=$EXCLUDE" >> "$GITHUB_OUTPUT"
+
+    - name: Run Anthropic security scanner
+      id: sec-run
+      if: inputs.mate == 'security'
+      # Pin to a specific commit SHA — upstream has no release tags.
+      # Bump deliberately by updating this SHA after reviewing
+      # https://github.com/anthropics/claude-code-security-review/commits/main
+      uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda
+      with:
+        claude-api-key: ${{ inputs.api-key }}
+        comment-pr: true
+        upload-results: true
+        exclude-directories: ${{ steps.sec-config.outputs.exclude }}
+
+    - name: Normalize security mate outputs
+      id: security-outputs
+      if: inputs.mate == 'security'
+      shell: bash
+      run: |
+        FINDINGS="${{ steps.sec-run.outputs.findings-count }}"
+        FINDINGS="${FINDINGS:-0}"
+        if [ "$FINDINGS" -gt 0 ] 2>/dev/null; then
+          OUTCOME="findings"
+        else
+          OUTCOME="none"
+        fi
+        {
+          echo "outcome=${OUTCOME}"
+          echo "status=ok"
+          echo "issue-url="
+          echo "pr-url="
+        } >> "$GITHUB_OUTPUT"
+        echo "Security mate completed: findings-count=${FINDINGS}, outcome=${OUTCOME}"
+
+    # ─── Drift mates (docs, tests, dead-code, logic): generic Claude CLI ───
     - name: Install Claude Code CLI
+      if: inputs.mate != 'security'
       shell: bash
       run: npm install -g "@anthropic-ai/claude-code@${{ inputs.claude-cli-version }}"
 
     - name: Run mate
       id: run
+      if: inputs.mate != 'security'
       shell: bash
       env:
-        # The Claude CLI reads this; it must be the Anthropic API key (not a GitHub token).
         ANTHROPIC_API_KEY: ${{ inputs.api-key }}
-        # Used by runner.sh for gh CLI calls that create issues/PRs in the consumer repo.
         GITHUB_TOKEN: ${{ github.token }}
-        # Which mate to run, and where its prompt/config live inside the action checkout.
         MATE_NAME: ${{ inputs.mate }}
         CONFIG_PATH: ${{ inputs.config-path }}
-        # Framework root — points at the action's own checkout inside _actions/, which is
-        # outside the consumer workspace. This is what makes the "phantom framework files"
-        # bug class structurally impossible in this model.
         MATES_ROOT: ${{ github.action_path }}
-        # Minimal trigger context for the mate prompt to reference.
         TRIGGER_CONTEXT: '{"event":"${{ github.event_name }}","sha":"${{ github.sha }}"}'
       run: |
         bash "${{ github.action_path }}/runner.sh" \

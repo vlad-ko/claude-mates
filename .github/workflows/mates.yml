@@ -28,7 +28,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mate: [docs, dead-code, logic, security, tests]
+        # security is NOT here — it's a PR-scoped policy gate, not a nightly
+        # drift scan. See .github/workflows/security.yml for the security
+        # mate dogfood (on: pull_request).
+        mate: [docs, dead-code, logic, tests]
 
     concurrency:
       group: mate-${{ matrix.mate }}
