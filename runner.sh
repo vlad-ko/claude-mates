@@ -28,34 +28,86 @@ if [ ! -f "$PROMPT_FILE" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PHASE 0: Self-loop guard — don't analyze our own output
+# PHASE 0: History lookups — cursor + window, then self-loop guard
 #
-# On scheduled runs, skip if no HUMAN commits have landed since this mate's
-# last contribution. Without this, the mate would review its own prior output
-# every night (echo chamber / churn risk).
+# Deepen history, compute LAST_MATE_COMMIT (the cursor for this mate's
+# previous contribution), compute CHANGED_FILES (the window since that
+# cursor), and enrich TRIGGER_CONTEXT with those as metadata.
 #
-# "Automation commits" we ignore:
+# The metadata is ADVISORY ONLY — prompts are not told to scope to it.
+# This preserves the state-query correctness contract: mates read HEAD
+# state and find drift everywhere, not just in the recent window. The
+# metadata lives in TRIGGER_CONTEXT so future prompt work (or downstream
+# analytics) can reference it without changing today's behavior.
+#
+# Cost guards remain: --allowedTools, allowed_paths, max_turns. The window
+# is not a scope boundary — it's information.
+#
+# "Automation commits" we ignore when finding the last human commit:
 #   - [claude-mate:*] — this mate or any other mate's merged PR
 #   - docs: Update CHANGELOG for v... — release automation's CHANGELOG PR
 #   - [skip release] — explicit opt-out marker
 #
-# Only gated on schedule events. workflow_dispatch (manual) and push always
-# run — a human explicitly asked or a real push happened.
+# The self-loop SKIP is gated on schedule events only. workflow_dispatch
+# (manual) and push always proceed — a human explicitly asked, or a real
+# push happened, and they deserve the full run.
 # ═══════════════════════════════════════════════════════════════════════════
 
-if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
-  # Deepen history so git log can reach back beyond recent commits. A small
-  # fetch-depth on the caller's checkout is fine because we deepen here.
-  git fetch --deepen 100 origin 2>/dev/null || true
+# Deepen history once (idempotent; no-op if already deep enough). Runs on
+# every event type so both the self-loop skip AND the metadata enrichment
+# have enough history to work with.
+git fetch --deepen 100 origin 2>/dev/null || true
 
+# Cursor: this mate's most recent contribution. Empty on first ever run
+# or after history rewrites that wiped the mate commits.
+LAST_MATE_COMMIT=$(git log -1 --format=%H \
+    --grep="\[claude-mate:${MATE_NAME}\]" 2>/dev/null || echo "")
+
+# Window: files touched between the cursor and HEAD. Only meaningful when
+# LAST_MATE_COMMIT exists. Capped at 200 entries to keep env-var/JSON size
+# reasonable; truncation is flagged in the metadata.
+CHANGED_FILES=""
+CHANGED_FILES_COUNT=0
+CHANGED_FILES_TRUNCATED="false"
+if [ -n "$LAST_MATE_COMMIT" ]; then
+  ALL_CHANGED_LIST=$(git diff --name-only "${LAST_MATE_COMMIT}..HEAD" 2>/dev/null || echo "")
+  CHANGED_FILES_COUNT=$(printf '%s\n' "$ALL_CHANGED_LIST" | sed '/^$/d' | wc -l | tr -d ' ')
+  CHANGED_FILES=$(printf '%s\n' "$ALL_CHANGED_LIST" | sed '/^$/d' | head -200)
+  if [ "$CHANGED_FILES_COUNT" -gt 200 ]; then
+    CHANGED_FILES_TRUNCATED="true"
+  fi
+fi
+
+# Enrich TRIGGER_CONTEXT JSON with since + changed_files (when available).
+# Python handles escaping correctly — never build JSON with string concat.
+if [ -n "$LAST_MATE_COMMIT" ]; then
+  TRIGGER_CONTEXT=$(
+    LAST_MATE_COMMIT="$LAST_MATE_COMMIT" \
+    CHANGED_FILES="$CHANGED_FILES" \
+    CHANGED_FILES_TRUNCATED="$CHANGED_FILES_TRUNCATED" \
+    TRIGGER_CONTEXT="$TRIGGER_CONTEXT" \
+    python3 -c "
+import json, os
+try:
+    tc = json.loads(os.environ.get('TRIGGER_CONTEXT') or '{}')
+except Exception:
+    tc = {}
+tc['since'] = os.environ['LAST_MATE_COMMIT']
+files = [f for f in os.environ.get('CHANGED_FILES','').splitlines() if f]
+tc['changed_files'] = files
+tc['changed_files_truncated'] = os.environ.get('CHANGED_FILES_TRUNCATED') == 'true'
+print(json.dumps(tc))
+" 2>/dev/null || echo "$TRIGGER_CONTEXT")
+fi
+
+# Self-loop SKIP — schedule only. We already have LAST_MATE_COMMIT above;
+# only need LAST_USER_COMMIT here for the comparison.
+if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
   LAST_USER_COMMIT=$(git log --invert-grep \
       --grep='\[claude-mate' \
       --grep='docs: Update CHANGELOG for v' \
       --grep='\[skip release\]' \
       -1 --format=%H 2>/dev/null || echo "")
-
-  LAST_MATE_COMMIT=$(git log -1 --format=%H \
-      --grep="\[claude-mate:${MATE_NAME}\]" 2>/dev/null || echo "")
 
   if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$LAST_USER_COMMIT" ] \
      && git merge-base --is-ancestor "$LAST_USER_COMMIT" "$LAST_MATE_COMMIT"; then
@@ -75,6 +127,8 @@ if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
   fi
   echo "Phase 0: Self-loop guard passed — human commits exist since last mate run."
 fi
+
+echo "Phase 0: TRIGGER_CONTEXT enriched (since=${LAST_MATE_COMMIT:-<none>}, changed_files=${CHANGED_FILES_COUNT}, truncated=${CHANGED_FILES_TRUNCATED})"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION — Read all mate settings from mate.yml and project config
@@ -823,6 +877,9 @@ cat > "/tmp/mate-${MATE_NAME}-summary.json" << JSONEOF
   "files_changed": ${FILES_CHANGED_COUNT},
   "violations_reverted": ${VIOLATIONS_FOUND},
   "branch": "${BRANCH_NAME}",
+  "since": "${LAST_MATE_COMMIT:-}",
+  "window_file_count": ${CHANGED_FILES_COUNT:-0},
+  "window_truncated": ${CHANGED_FILES_TRUNCATED:-false},
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSONEOF
