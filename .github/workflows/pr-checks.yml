@@ -20,6 +20,16 @@ jobs:
       - name: Lint runner.sh
         run: shellcheck -x runner.sh
 
+  runner-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Run Phase 0 integration tests
+        run: bash tests/runner_phase0_test.sh
+
   yaml-lint:
     runs-on: ubuntu-latest
     steps:
