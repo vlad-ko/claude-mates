@@ -21,8 +21,13 @@ jobs:
     if: >-
       !contains(github.event.head_commit.message, '[skip release]') &&
       !contains(github.event.head_commit.message, '[claude-mate')
+    # contents: write — for pushing tags and creating the GitHub Release
+    # pull-requests: write — for opening the automated CHANGELOG PR after each release.
+    # Both are required; the CHANGELOG PR step at the end of this job fails with
+    # "Resource not accessible by integration" if pull-requests is missing.
     permissions:
       contents: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v5
