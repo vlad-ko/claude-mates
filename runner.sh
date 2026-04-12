@@ -28,6 +28,55 @@ if [ ! -f "$PROMPT_FILE" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# PHASE 0: Self-loop guard — don't analyze our own output
+#
+# On scheduled runs, skip if no HUMAN commits have landed since this mate's
+# last contribution. Without this, the mate would review its own prior output
+# every night (echo chamber / churn risk).
+#
+# "Automation commits" we ignore:
+#   - [claude-mate:*] — this mate or any other mate's merged PR
+#   - docs: Update CHANGELOG for v... — release automation's CHANGELOG PR
+#   - [skip release] — explicit opt-out marker
+#
+# Only gated on schedule events. workflow_dispatch (manual) and push always
+# run — a human explicitly asked or a real push happened.
+# ═══════════════════════════════════════════════════════════════════════════
+
+if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
+  # Deepen history so git log can reach back beyond recent commits. A small
+  # fetch-depth on the caller's checkout is fine because we deepen here.
+  git fetch --deepen 100 origin 2>/dev/null || true
+
+  LAST_USER_COMMIT=$(git log --invert-grep \
+      --grep='\[claude-mate' \
+      --grep='docs: Update CHANGELOG for v' \
+      --grep='\[skip release\]' \
+      -1 --format=%H 2>/dev/null || echo "")
+
+  LAST_MATE_COMMIT=$(git log -1 --format=%H \
+      --grep="\[claude-mate:${MATE_NAME}\]" 2>/dev/null || echo "")
+
+  if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$LAST_USER_COMMIT" ] \
+     && git merge-base --is-ancestor "$LAST_USER_COMMIT" "$LAST_MATE_COMMIT"; then
+    echo "=== Phase 0: Self-loop guard ==="
+    echo "Last user commit ($LAST_USER_COMMIT) is an ancestor of last ${MATE_NAME} mate commit ($LAST_MATE_COMMIT)."
+    echo "No human-authored work since this mate's last contribution — skipping."
+    # Emit outputs so downstream steps can branch on this.
+    if [ -n "${GITHUB_OUTPUT:-}" ]; then
+      {
+        echo "outcome=none"
+        echo "status=clean"
+        echo "issue-url="
+        echo "pr-url="
+      } >> "$GITHUB_OUTPUT"
+    fi
+    exit 0
+  fi
+  echo "Phase 0: Self-loop guard passed — human commits exist since last mate run."
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION — Read all mate settings from mate.yml and project config
 # Hard rules are read here, enforced in Phase 2.
 # ═══════════════════════════════════════════════════════════════════════════
@@ -777,3 +826,26 @@ cat > "/tmp/mate-${MATE_NAME}-summary.json" << JSONEOF
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSONEOF
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Action outputs — surface a simplified outcome to callers via $GITHUB_OUTPUT.
+# Internal OUTCOME has many values; the composite action contract is just
+#   outcome ∈ {none, issue, pr}  and  status ∈ {ok, clean, error, empty}
+# Downstream workflow steps can branch on these.
+# ═══════════════════════════════════════════════════════════════════════════
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  case "$OUTCOME" in
+    issue_and_pr|issue_only_pr_failed)
+      ACTION_OUTCOME="pr" ;;
+    issue_created|no_changes_existing_issue|violations_only)
+      ACTION_OUTCOME="issue" ;;
+    *)
+      ACTION_OUTCOME="none" ;;
+  esac
+  {
+    echo "outcome=${ACTION_OUTCOME}"
+    echo "status=${CLAUDE_STATUS}"
+    echo "issue-url=${ISSUE_URL_OUT}"
+    echo "pr-url=${PR_URL_OUT}"
+  } >> "$GITHUB_OUTPUT"
+fi

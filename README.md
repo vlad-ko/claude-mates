@@ -1,158 +1,161 @@
 # Claude Mates
 
-Autonomous background agents for codebase maintenance, powered by Claude Code CLI.
+Autonomous maintenance agents for your codebase, shipped as a GitHub composite action.
 
-Inspired by [AI Daemons](https://ai-daemons.com/spec/) but built natively on Claude Code's skills, tools, and CLAUDE.md conventions.
+Each mate is a specialized Claude Code agent that runs on a schedule, analyzes your repo, and either files an issue or opens a PR with fixes. Mates never merge — humans decide.
 
-## What Are Mates?
+Inspired by [AI Daemons](https://ai-daemons.com/spec/), built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-Mates are specialized background agents that handle maintenance tasks humans tend to defer: documentation quality, security reviews, dead code cleanup, test hygiene, and business logic audits.
+## The mates
 
-Each mate:
-1. **Activates** on merge to main or nightly schedule
-2. **Analyzes** the blast radius of recent changes (or scans the full codebase)
-3. **Creates a GitHub issue** describing its findings
-4. **Opens a PR** with fixes (or flags issues requiring human judgment)
-5. **Never merges its own PRs** — human approval required
+| Mate | Purpose | Default model |
+|---|---|---|
+| `docs` | Documentation quality, staleness, drift | Haiku |
+| `tests` | Outdated/redundant tests, weak assertions | Haiku |
+| `dead-code` | Unused symbols, orphaned files | Haiku |
+| `logic` | TODOs, deprecated APIs, hardcoded values | Haiku |
+| `security` | Security architecture review (for PR-scoped review see [examples/README.md](examples/README.md)) | Sonnet |
 
-## Mates
+All mates are "drift detection" — they find issues that accumulate over time, so they run on a nightly cron by default.
 
-| Mate | Purpose | Model | Trigger |
-|------|---------|-------|---------|
-| `docs` | Documentation quality & staleness | Haiku | Post-merge |
-| `security` | Security architecture review | Sonnet | Post-merge |
-| `dead-code` | Unused code, orphaned files | Haiku | Nightly |
-| `tests` | Outdated/redundant tests | Haiku | Nightly |
-| `logic` | TODOs, deprecated APIs, hardcoded values | Haiku | Nightly |
+## Quick start
 
-## Quick Start
-
-### 1. Add secrets to your repo
+### 1. Add a secret
 
 ```bash
-# Separate API key for mates (recommended for cost tracking)
 gh secret set CLAUDE_MATES_API_KEY --repo your-org/your-repo
-
-# GitHub token (or use default GITHUB_TOKEN)
-# Only needed if you want mates to create PRs with a custom identity
+# Paste your Anthropic API key
 ```
 
-### 2. Add mate workflows
+### 2. Enable "Allow GitHub Actions to create and approve pull requests"
 
-Copy only the mates you want from `examples/` to `.github/workflows/` in your repo:
+Repo **Settings → Actions → General → Workflow permissions**. Without this, the mate can open issues but not PRs.
 
-```bash
-# Just docs mate
-cp examples/mate-docs.yml .github/workflows/
-
-# Or all mates
-cp examples/mate-*.yml .github/workflows/
-```
-
-Each mate is a separate workflow — independent triggers, logs, and concurrency.
-
-> **Important:** Example workflows reference `ref: v0.1.0`. Pin to the latest [release tag](https://github.com/vlad-ko/claude-mates/releases) for stability. Check the releases page for upgrade instructions.
-
-### 3. Add project config
-
-Create `.claude-mates.yml` in your repo root:
+### 3. Create `.claude-mates.yml` in your repo root
 
 ```yaml
 mates:
   docs:
     enabled: true
-    model: haiku
-    schedule: post-merge
-    # Override default scope (optional — defaults come from mate.yml)
-    allowed_paths:
-      - "docs/**"
-      - "CLAUDE.md"
-      - "README.md"
-  security:
+  tests:
     enabled: true
-    model: sonnet
-    schedule: post-merge
   dead-code:
     enabled: true
-    model: haiku
-    schedule: nightly
-  tests:
-    enabled: false
   logic:
     enabled: false
+  security:
+    enabled: false  # Consider PR-scoped claude-code-security-review instead
 
 deny:
-  - "NEVER merge PRs"
+  - "NEVER merge PRs — always require human approval"
   - "NEVER modify .env files or infrastructure config"
-  - "NEVER push directly to main"
 
 labels:
   prefix: "claude-mate"
 ```
 
-### 4. Run manually (first time)
+Full schema in [`.claude-mates.yml`](.claude-mates.yml) of this repo.
+
+### 4. Add a workflow
+
+Pick one pattern from [examples/README.md](examples/README.md). The matrix-over-mates pattern is the simplest:
+
+```yaml
+name: Mates
+on:
+  schedule:
+    - cron: '0 6 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  mate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        mate: [docs, tests, dead-code]
+    concurrency:
+      group: mate-${{ matrix.mate }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 100 }
+      - uses: vlad-ko/claude-mates@v0.3.0
+        with:
+          mate: ${{ matrix.mate }}
+          api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
+```
+
+### 5. Trigger manually for the first time
 
 ```bash
-gh workflow run mate-docs.yml
+gh workflow run mates.yml
 ```
 
-## How It Works
+## Action reference
+
+```yaml
+- uses: vlad-ko/claude-mates@v0.3.0
+  with:
+    mate: docs                   # required: one of docs, tests, dead-code, logic, security
+    api-key: ${{ ... }}          # required: Anthropic API key
+    config-path: .claude-mates.yml     # optional (default shown)
+    claude-cli-version: 2.1.97         # optional — pin for reproducibility
+```
+
+| Output | Values |
+|---|---|
+| `outcome` | `none` \| `issue` \| `pr` |
+| `status` | `ok` \| `clean` \| `error` \| `empty` |
+| `issue-url` | URL of created issue, or empty |
+| `pr-url` | URL of created PR, or empty |
+
+## How it works
 
 ```
-GitHub Actions trigger (merge / cron / manual)
-        |
-        v
-Dispatcher (reads .claude-mates.yml, determines which mates to run)
-        |
-        v
-Runner (for each mate):
-  1. Checks out repo
-  2. Installs Claude Code CLI
-  3. Runs: claude -p "<mate prompt>" --allowedTools "..." --max-turns 15
-  4. Claude reads the repo's CLAUDE.md (project rules auto-enforced)
-  5. If changes made → creates branch, commits, opens PR
-  6. If findings only → creates GitHub issue
-  7. Uploads run summary as artifact
+schedule / workflow_dispatch
+        │
+        ▼
+action.yml (composite)
+        │ ├─ installs @anthropic-ai/claude-code CLI (pinned)
+        │ └─ invokes runner.sh with MATE_NAME + MATES_ROOT = github.action_path
+        ▼
+runner.sh
+        │ ├─ Phase 0: self-loop guard — skip if no human commits since last mate run
+        │ ├─ Phase 1: Claude analyzes repo, edits files (tool-scoped via --allowedTools)
+        │ └─ Phase 2: shell validates, commits, opens branch/issue/PR
+        ▼
+$GITHUB_OUTPUT surfaces outcome + URLs for downstream steps
 ```
+
+## Design principles
+
+1. **Mates never merge.** They propose. Humans decide.
+2. **Code enforces, prompts guide.** Hard rules (scope, protected paths, git isolation) live in `runner.sh`. Prompts guide behavior only.
+3. **No file copying.** The action IS the integration — no `.claude-mates-framework/` checkout, no per-release template bumps.
+4. **No self-loops.** runner.sh skips scheduled runs when no human commit has landed since the mate's last contribution (prevents echo-chamber review of the mate's own output).
+5. **Cost-bounded.** Per-mate model selection, per-mate max-turns, nightly cadence (no per-merge waste).
+6. **Observable.** Every run writes `/tmp/mate-*-summary.json` (uploaded as artifact) and populates GitHub Job Summary + action outputs.
+
+## Upgrading
+
+Pin `uses: vlad-ko/claude-mates@vX.Y.Z` to a specific release tag. Check [CHANGELOG.md](CHANGELOG.md) before bumping — patch versions are safe; minor versions may add features; major versions document breaking changes.
 
 ## Cost
 
-| Model | Typical mate run | Monthly (5 mates, weekdays) |
-|-------|-----------------|---------------------------|
-| Haiku 4.5 | $0.08-0.15 | $8-15 |
-| Sonnet 4.6 | $0.30-0.50 | $30-50 |
-| Mixed (Haiku default, Sonnet for security) | — | $15-25 |
+| Model | Typical run | Monthly (5 mates, weekdays) |
+|---|---|---|
+| Haiku 4.5 | $0.08–$0.15 | $8–$15 |
+| Sonnet 4.6 | $0.30–$0.50 | $30–$50 |
+| Mixed (Haiku default, Sonnet for security) | — | $15–$25 |
 
-## Design Principles
-
-1. **Mates never merge** — they propose, humans decide
-2. **Narrow scope** — each mate has a single responsibility
-3. **Project-aware** — reads the target repo's CLAUDE.md for conventions
-4. **Cost-bounded** — max turns per run, model selection per mate
-5. **Observable** — every run produces a structured summary
-6. **Safe** — deny rules prevent destructive actions
-
-## Versioning
-
-Claude Mates follows [semantic versioning](https://semver.org/). Pin your workflows to a release tag:
-
-```yaml
-# In your workflow file
-- uses: actions/checkout@v5
-  with:
-    repository: vlad-ko/claude-mates
-    ref: v0.1.0  # Pin to release tag
-    path: .claude-mates-framework
-```
-
-Check [CHANGELOG.md](CHANGELOG.md) for what changed between versions.
-
-## Repo Settings
-
-For mates to create PRs, enable this repo setting:
-
-**Settings > Actions > General > Workflow permissions > Allow GitHub Actions to create and approve pull requests**
+The self-loop guard brings real cost down further on quiet repos — mates with no human work to analyze exit in seconds and skip the Claude API entirely.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
