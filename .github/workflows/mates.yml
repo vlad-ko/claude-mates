@@ -1,0 +1,64 @@
+# Dogfood: run the action on claude-mates itself.
+#
+# Each mate is a separate matrix leg — independent concurrency group, separate
+# log stream, one API budget per mate. `fail-fast: false` so one mate's error
+# doesn't cancel the others.
+#
+# Uses `uses: ./` to load the action from the current checkout. This is the
+# SAME code path external adopters run via `uses: vlad-ko/claude-mates@vX.Y.Z`.
+# Whatever breaks for us breaks for them, and vice versa.
+
+name: Mates
+
+on:
+  schedule:
+    - cron: '0 6 * * 1-5'  # Weekdays 6am UTC
+  workflow_dispatch: {}    # Manual dispatch runs all mates; the self-loop
+                           # guard in runner.sh keeps unneeded runs cheap.
+
+jobs:
+  mate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        mate: [docs, dead-code, logic, security, tests]
+
+    concurrency:
+      group: mate-${{ matrix.mate }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Deep enough history for runner.sh's self-loop guard to look back
+          # past recent mate commits to find the last human commit.
+          fetch-depth: 100
+
+      - id: mate
+        uses: ./
+        with:
+          mate: ${{ matrix.mate }}
+          api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
+
+      - name: Log outcome
+        if: always()
+        run: |
+          echo "Outcome: ${{ steps.mate.outputs.outcome }}"
+          echo "Status:  ${{ steps.mate.outputs.status }}"
+          [ -n "${{ steps.mate.outputs.issue-url }}" ] && echo "Issue: ${{ steps.mate.outputs.issue-url }}"
+          [ -n "${{ steps.mate.outputs.pr-url }}" ]   && echo "PR:    ${{ steps.mate.outputs.pr-url }}"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mate-${{ matrix.mate }}-${{ github.run_number }}
+          path: /tmp/mate-*-summary.json
+          retention-days: 30
+          if-no-files-found: ignore

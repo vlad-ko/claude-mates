@@ -1,39 +1,66 @@
-name: 'Claude Mates'
-description: 'Run autonomous maintenance agents powered by Claude Code'
+name: 'Claude Mate'
+description: 'Run an autonomous Claude-powered maintenance agent (docs, tests, dead-code, logic, security) on your repo.'
+author: 'vlad-ko'
+branding:
+  icon: 'zap'
+  color: 'purple'
+
 inputs:
   mate:
-    description: 'Which mate to run (docs, security, dead-code, tests, logic, or all)'
+    description: 'Which mate to run. One of: docs, tests, dead-code, logic, security. See the repo README for the full list.'
     required: true
-    default: 'all'
-  anthropic_api_key:
-    description: 'Anthropic API key for Claude Code'
+  api-key:
+    description: 'Anthropic API key (the CLAUDE_MATES_API_KEY secret). Passed to the Claude Code CLI as ANTHROPIC_API_KEY.'
     required: true
-  github_token:
-    description: 'GitHub token for creating branches/PRs/issues'
-    required: true
-  config_path:
-    description: 'Path to .claude-mates.yml in the target repo'
+  config-path:
+    description: 'Path to .claude-mates.yml inside the consumer workspace. Used for per-mate enable/disable, model overrides, scope, and deny rules.'
     required: false
     default: '.claude-mates.yml'
-  trigger_context:
-    description: 'JSON context about what triggered this run (PR number, commit SHA, etc.)'
+  claude-cli-version:
+    description: 'Version of @anthropic-ai/claude-code to install. Pin explicitly for reproducible runs.'
     required: false
-    default: '{}'
+    default: '2.1.97'
+
+outputs:
+  outcome:
+    description: 'What the mate produced on this run. One of: none | issue | pr.'
+    value: ${{ steps.run.outputs.outcome }}
+  status:
+    description: 'Classification of Claude''s output. One of: ok | clean | error | empty.'
+    value: ${{ steps.run.outputs.status }}
+  issue-url:
+    description: 'URL of the GitHub issue created by this run (empty if no issue).'
+    value: ${{ steps.run.outputs.issue-url }}
+  pr-url:
+    description: 'URL of the GitHub PR created by this run (empty if no PR).'
+    value: ${{ steps.run.outputs.pr-url }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Install Claude Code
+    - name: Install Claude Code CLI
       shell: bash
-      run: npm install -g @anthropic-ai/claude-code
+      run: npm install -g "@anthropic-ai/claude-code@${{ inputs.claude-cli-version }}"
 
-    - name: Run dispatcher
+    - name: Run mate
+      id: run
       shell: bash
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}
+        # The Claude CLI reads this; it must be the Anthropic API key (not a GitHub token).
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+        # Used by runner.sh for gh CLI calls that create issues/PRs in the consumer repo.
+        GITHUB_TOKEN: ${{ github.token }}
+        # Which mate to run, and where its prompt/config live inside the action checkout.
         MATE_NAME: ${{ inputs.mate }}
-        CONFIG_PATH: ${{ inputs.config_path }}
-        TRIGGER_CONTEXT: ${{ inputs.trigger_context }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+        # Framework root — points at the action's own checkout inside _actions/, which is
+        # outside the consumer workspace. This is what makes the "phantom framework files"
+        # bug class structurally impossible in this model.
         MATES_ROOT: ${{ github.action_path }}
-      run: bash ${{ github.action_path }}/dispatcher.sh
+        # Minimal trigger context for the mate prompt to reference.
+        TRIGGER_CONTEXT: '{"event":"${{ github.event_name }}","sha":"${{ github.sha }}"}'
+      run: |
+        bash "${{ github.action_path }}/runner.sh" \
+          "${{ inputs.mate }}" \
+          "${{ github.action_path }}/mates/${{ inputs.mate }}" \
+          "${{ inputs.config-path }}"
