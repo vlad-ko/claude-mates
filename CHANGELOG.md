@@ -2,6 +2,13 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.6.4] - 2026-04-12
+
+### Fixed
+- fix: Release regex handles feat!: and scoped prefixes; group $GITHUB_OUTPUT redirects
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.6.3...v0.6.4
+
 ## [0.6.1] - 2026-04-12
 
 ### Changed
