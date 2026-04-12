@@ -2,6 +2,14 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.2.5] - 2026-04-12
+
+### Changed
+- docs: Documentation quality and staleness reviewer findings [claude-mate:docs]
+- docs: Update CHANGELOG for v0.2.4 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.2.4...v0.2.5
+
 ## [0.2.4] - 2026-04-12
 
 ### Changed
