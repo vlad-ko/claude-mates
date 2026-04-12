@@ -20,9 +20,6 @@ jobs:
       - name: Lint runner.sh
         run: shellcheck -x runner.sh
 
-      - name: Lint dispatcher.sh
-        run: shellcheck -x dispatcher.sh
-
   yaml-lint:
     runs-on: ubuntu-latest
     steps:
@@ -36,4 +33,4 @@ jobs:
           yamllint -d relaxed .claude-mates.yml
           yamllint -d relaxed mates/*/mate.yml
           yamllint -d relaxed .github/workflows/*.yml
-          yamllint -d relaxed examples/*.yml
+          yamllint -d relaxed action.yml
