@@ -872,7 +872,13 @@ case "$OUTCOME" in
   pr_created)
     echo "║  RESULT:   PR opened for human review"
     echo "║  PR:       #${PR_NUM} ${PR_URL_OUT}"
-    [ -n "$EXISTING_ISSUE" ] && echo "║  Linked:   #${EXISTING_ISSUE} (will auto-close on merge via Fixes)"
+    # Guard with `if` — short-circuit `[ -n "" ] && echo` exits 1 when
+    # empty. Not currently a bug (the next echo succeeds and becomes the
+    # branch's last exit code) but defensive consistency with the same
+    # pattern we just fixed in mates.yml.
+    if [ -n "$EXISTING_ISSUE" ]; then
+      echo "║  Linked:   #${EXISTING_ISSUE} (will auto-close on merge via Fixes)"
+    fi
     echo "║  Files:    ${FILES_CHANGED_COUNT} changed"
     ;;
   findings_in_summary)

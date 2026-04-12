@@ -64,8 +64,19 @@ jobs:
         run: |
           echo "Outcome: ${{ steps.mate.outputs.outcome }}"
           echo "Status:  ${{ steps.mate.outputs.status }}"
-          [ -n "${{ steps.mate.outputs.issue-url }}" ] && echo "Issue: ${{ steps.mate.outputs.issue-url }}"
-          [ -n "${{ steps.mate.outputs.pr-url }}" ]   && echo "PR:    ${{ steps.mate.outputs.pr-url }}"
+          # Guarded with `if` blocks rather than `A && echo` short-circuits.
+          # When the variable is empty, `[ -n "" ]` exits 1 and the `&& echo`
+          # chain short-circuits with exit 1. Under bash -e (GitHub Actions'
+          # default shell for run: blocks), a non-zero exit at the end of the
+          # script fails the step — even though the mate itself succeeded.
+          # This was flagged on webo by Bug Bot on merge of PR #1507 and
+          # applies identically here in the dogfood workflow.
+          if [ -n "${{ steps.mate.outputs.issue-url }}" ]; then
+            echo "Issue: ${{ steps.mate.outputs.issue-url }}"
+          fi
+          if [ -n "${{ steps.mate.outputs.pr-url }}" ]; then
+            echo "PR:    ${{ steps.mate.outputs.pr-url }}"
+          fi
 
       - uses: actions/upload-artifact@v7
         if: always()
