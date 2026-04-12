@@ -199,6 +199,88 @@ If you prefer to use Anthropic's action directly without going through claude-ma
 
 Claude Mates intentionally does **not** bundle a PR-scoped security workflow; the dedicated `claude-code-security-review` action is maintained by Anthropic and stays current with their model lineup.
 
+### Security aftermath — tracked issue on merge-with-findings (recommended companion)
+
+The security mate's inline PR comments and required status check are durable only while the PR is open. If a repo admin bypasses the required check and merges a PR with unresolved findings, those findings are on `main` with no tracked work item. This companion workflow closes that gap: when a PR merges with findings still present, it **opens a GitHub issue** labeled `claude-mate:security` so the vulnerability shows up in issue searches, assignee workflows, and triage tooling.
+
+**Key difference from the drift mates' pattern**: drift mates deliberately do NOT auto-file issues (too noisy). Security is the exception because merging with residual findings is a rare, high-signal event — exactly the case where issue tracking earns its keep.
+
+Add this workflow alongside `security-review.yml`:
+
+```yaml
+# .github/workflows/security-aftermath.yml
+name: Security Aftermath
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  issues: write
+  contents: read
+  actions: read   # Download artifacts from another workflow's run
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  aftermath:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Look up security scan for this PR
+        id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${SHA}&per_page=20" \
+            --jq '.workflow_runs[] | select(.name == "Security Review") | .id' | head -1)
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Download findings artifact
+        id: download
+        if: steps.lookup.outputs.run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.lookup.outputs.run_id }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p /tmp/findings
+          if gh run download "${RUN_ID}" --repo "${{ github.repository }}" \
+               -n "security-findings-pr-${PR}" -D /tmp/findings 2>/dev/null; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open issue if findings were merged
+        if: steps.download.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          MERGE_COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          COUNT=$(jq -r '.findings_count // 0' /tmp/findings/security-summary.json)
+          [ "$COUNT" -eq 0 ] 2>/dev/null && exit 0
+
+          gh issue create --repo "${REPO}" \
+            --title "[claude-mate:security] ${COUNT} finding(s) merged via PR #${PR}" \
+            --label "claude-mate:security" \
+            --body "Security findings merged to main. See PR #${PR} inline comments, and commit ${MERGE_COMMIT}."
+```
+
+> **Note**: change the \`select(.name == "Security Review")\` filter if your main security workflow is named differently (this filters by workflow `name:`, not file path).
+
+### Why this differs from other mates
+
+Drift mates (docs, tests, dead-code, logic) render findings to the Job Summary panel and never auto-file issues — findings without a concrete fix would be tracker noise at nightly scale. Security is different on two axes:
+
+1. **Rarity × severity**: a clean merge with residual security findings is a rare event, and each such event is high-stakes. Opening an issue per occurrence keeps the signal high.
+2. **Persistence**: security findings that land on `main` must be remediated regardless of whether the PR that introduced them is still open. An issue outlives the PR.
+
+So security alone gets the issue-opening treatment, and only in the narrow post-merge-with-findings case. All other security findings stay in inline PR comments where they're naturally resolved as the PR iterates.
+
 ---
 
 ## Running drift mates on pull requests (optional)

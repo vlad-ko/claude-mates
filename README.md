@@ -27,6 +27,17 @@ Two classes:
 
 The security mate is a thin wrapper over Anthropic's specialized scanner: you keep the `mate: security` interface, the scanner does the analysis. See [examples/README.md](examples/README.md) for the PR-scoped invocation pattern.
 
+**Key architectural difference from the drift mates**:
+
+| | Drift mates | Security mate |
+|---|---|---|
+| Findings go to | Job Summary panel (ephemeral, per-run) | Inline PR review comments (during PR lifecycle) |
+| Opens a PR? | Yes, when there's a concrete fix | No — detection-only |
+| Opens an issue? | **No** (avoids tracker noise at nightly scale) | **Only** when a PR merges with residual findings (via optional `security-aftermath.yml` companion). Rare × high-signal. |
+| Blocks merge? | Never (advisory only) | Yes, when `security` is added as a required status check |
+
+See [examples/README.md § Security aftermath](examples/README.md#security-aftermath--tracked-issue-on-merge-with-findings-recommended-companion) for the tracked-issue pattern — recommended for production app repos where a vulnerability landing without remediation is a real risk.
+
 ## Quick start
 
 ### 1. Add a secret
