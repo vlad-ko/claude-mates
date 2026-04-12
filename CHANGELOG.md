@@ -22,9 +22,10 @@ First tagged release. Framework is feature-complete for single-repo use.
 - **Scope enforcement** — Per-mate `allowed_paths` in mate.yml, validated with fnmatch
 - **Project config overrides** — Consumer repos can override `allowed_paths` per mate in `.claude-mates.yml` ([#23])
 - **Change size guardrails** — Warning if a mate modifies >20 files
-- **Claude output visibility** — Phase 1.5 logs Claude's analysis to CI ([#15])
+- **Claude output classification** — Phase 1.5 detects API errors, empty outputs, and clean runs before issue creation ([#15], [#33])
 - **Dynamic issue/PR text** — Titles and commit messages driven by mate.yml `description` and `commit_prefix` ([#13])
 - **PR CI validation** — shellcheck and yamllint on PRs ([#25])
+- **Job Summary output** — Workflow status visible in GitHub Actions summary panel ([#33])
 - **5 mates** — docs, security, dead-code, tests, logic
 - **Self-dogfooding** — All 5 mates run on the claude-mates repo itself
 - **CLAUDE.md** — Project development guidelines
@@ -35,7 +36,8 @@ First tagged release. Framework is feature-complete for single-repo use.
 - Issue body uses Claude's actual analysis, not generic fallback ([#16])
 - PR creation permission documented ([#14])
 - Node.js 24 opt-in to eliminate deprecation warnings ([#21])
-- Example workflows updated to v5 actions and release tags ([#22])
+- Example workflows updated to v7 GitHub Actions and release tags ([#22], [#33])
+- False-positive issues from empty/error outputs ([#33])
 
 ### Architecture
 - **Two-phase design**: Phase 1 (Claude, sandboxed) + Phase 2 (Shell, enforced)

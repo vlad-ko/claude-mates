@@ -21,19 +21,24 @@ When deciding where a rule belongs, ask: "If the LLM ignores this instruction, d
 
 ## Architecture
 
-### Two-Phase Design
+### Three-Phase Design
 
 ```
 Phase 1 (Claude):  Analyze and edit files
                    Constrained by --allowedTools (no git, no gh, no shell)
                    Guided by PROMPT.md (behavioral instructions)
 
+Phase 1.5 (Shell): Classify Claude output quality
+                   Detect API errors, empty results, and clean runs
+                   Set CLAUDE_STATUS (error, empty, clean, ok)
+                   Decide whether to proceed to Phase 2 or exit cleanly
+
 Phase 2 (Shell):   Validate changes against hard rules
                    Create branch, commit, issue, PR deterministically
                    Reject/revert violations — LLM has no say
 ```
 
-Phase 1 is the LLM's sandbox. Phase 2 is the guardrail. Never rely on Phase 1 compliance for safety — always verify in Phase 2.
+Phase 1 is the LLM's sandbox. Phase 1.5 detects output quality and failures before any git operations. Phase 2 is the guardrail. Never rely on Phase 1 compliance for safety — always verify in Phase 1.5 and Phase 2.
 
 ### Mate Configuration (mate.yml)
 
