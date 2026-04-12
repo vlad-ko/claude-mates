@@ -1,11 +1,16 @@
 # Claude Mate: Security
-# Runs on merge to main
+# Runs nightly. For adopters: consider replacing with a PR-scoped specialized
+# security review like anthropics/claude-code-security-review — pre-merge is
+# a better fit for security than post-merge.
+#
+# Kept here for dogfooding the generic mate framework. Nightly batching
+# means credits scale with calendar time, not commit volume.
 
 name: "Mate: Security"
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1-5'  # Weekdays 6am UTC
   workflow_dispatch: {}
 
 concurrency:

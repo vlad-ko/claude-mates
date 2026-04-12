@@ -1,11 +1,14 @@
 # Claude Mate: Docs
-# Runs on merge to main
+# Runs nightly on weekdays. Doc drift is a staleness problem, not a
+# per-commit problem — batching once per day catches accumulated drift
+# with far fewer API calls than per-merge runs, and eliminates the
+# "CHANGELOG-PR merge spuriously triggers docs mate" waste pattern.
 
 name: "Mate: Docs"
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1-5'  # Weekdays 6am UTC
   workflow_dispatch: {}
 
 concurrency:

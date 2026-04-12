@@ -1,11 +1,11 @@
 # Claude Mate: Dead Code
-# Runs on merge to main and nightly schedule
+# Runs nightly. Dead-code detection is a drift problem — accumulates over
+# days/weeks — so a per-merge trigger just burns API credits without adding
+# signal beyond what the next nightly run would catch.
 
 name: "Mate: Dead Code"
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: '0 6 * * 1-5'  # Weekdays 6am UTC
   workflow_dispatch: {}

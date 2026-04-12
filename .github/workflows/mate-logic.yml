@@ -1,11 +1,10 @@
 # Claude Mate: Logic
-# Runs on merge to main and nightly schedule
+# Runs nightly. Logic-quality review is drift detection — nightly batching
+# is sufficient, per-merge runs waste API credits.
 
 name: "Mate: Logic"
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: '0 6 * * 1-5'  # Weekdays 6am UTC
   workflow_dispatch: {}
