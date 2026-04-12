@@ -67,10 +67,14 @@ jobs:
             exit 0
           fi
 
-          # Determine bump type from conventional commits
-          if echo "$COMMITS" | grep -qiE "^[a-f0-9]+ feat(\(|:)"; then
+          # Determine bump type from conventional commits.
+          # Pattern accepts optional scope (paren group) and optional ! breaking
+          # marker. Without the !? here, `feat!:` (a breaking feature) silently
+          # falls through to the patch regex — producing a wrong patch bump
+          # instead of a minor. Porting webo's correct regex.
+          if echo "$COMMITS" | grep -qiE "^[a-f0-9]+ feat(\([a-z0-9-]+\))?!?:"; then
             BUMP="minor"
-          elif echo "$COMMITS" | grep -qiE "^[a-f0-9]+ (fix|chore|docs|refactor|style|perf|test)(\(|:)"; then
+          elif echo "$COMMITS" | grep -qiE "^[a-f0-9]+ (fix|chore|docs|refactor|style|perf|test)(\([a-z0-9-]+\))?!?:"; then
             BUMP="patch"
           else
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -89,9 +93,11 @@ jobs:
           esac
 
           NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
-          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
-          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "bump=$BUMP"
+            echo "new_tag=$NEW_TAG"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
           echo "Version bump: $BUMP ($LATEST → $NEW_TAG)"
 
       - name: Build grouped release notes
@@ -101,9 +107,11 @@ jobs:
           LATEST="${{ steps.latest.outputs.tag }}"
 
           # Group commits by conventional prefix into GitHub Release body
-          FEATS=$(grep -iE "^[a-f0-9]+ feat(\(|:)" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
-          FIXES=$(grep -iE "^[a-f0-9]+ fix(\(|:)" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
-          OTHER=$(grep -iE "^[a-f0-9]+ (chore|docs|refactor|style|perf|test)(\(|:)" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
+          # Pattern accepts optional scope and optional ! breaking marker,
+          # matching the bump-detection pattern above.
+          FEATS=$(grep -iE "^[a-f0-9]+ feat(\([a-z0-9-]+\))?!?:" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
+          FIXES=$(grep -iE "^[a-f0-9]+ fix(\([a-z0-9-]+\))?!?:" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
+          OTHER=$(grep -iE "^[a-f0-9]+ (chore|docs|refactor|style|perf|test)(\([a-z0-9-]+\))?!?:" /tmp/release-commits.txt 2>/dev/null | sed 's/^[a-f0-9]* //' || true)
 
           {
             if [ -n "$FEATS" ]; then
