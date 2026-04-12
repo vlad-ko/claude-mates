@@ -100,8 +100,73 @@ print(json.dumps(tc))
 " 2>/dev/null || echo "$TRIGGER_CONTEXT")
 fi
 
-# Self-loop SKIP — schedule only. We already have LAST_MATE_COMMIT above;
-# only need LAST_USER_COMMIT here for the comparison.
+# ─── Helper: emit skip outputs and exit cleanly ─────────────────────────────
+# Used by all Phase 0 skip paths. Keeps output contract consistent.
+emit_skip_and_exit() {
+  local reason="$1"
+  echo "=== Phase 0: Self-loop guard ==="
+  echo "$reason"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    {
+      echo "outcome=none"
+      echo "status=clean"
+      echo "issue-url="
+      echo "pr-url="
+    } >> "$GITHUB_OUTPUT"
+  fi
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "## ${MATE_NAME} — skipped"
+      echo ""
+      echo "_${reason}_"
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+  exit 0
+}
+
+# ─── Event-agnostic guards (apply on any trigger except workflow_dispatch) ──
+# workflow_dispatch is manual invocation — a human explicitly asked, so we
+# respect that and always run (no skipping).
+#
+# On pull_request / push / schedule, apply these checks:
+#   1. PR branch starts with claude-mate/   (PRs from this mate or another)
+#   2. HEAD commit message contains [claude-mate   (mate-authored merge/push)
+#   3. HEAD commit message contains [skip release] (release/CHANGELOG PR)
+#   4. HEAD commit message starts with "docs: Update CHANGELOG for v"
+#      (defense-in-depth for CHANGELOG merges where [skip release] was
+#       accidentally removed)
+if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
+  # Check 1: PR branch name (only populated on pull_request events)
+  if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] \
+     && [ -n "${GITHUB_HEAD_REF:-}" ] \
+     && [[ "${GITHUB_HEAD_REF}" =~ ^claude-mate/ ]]; then
+    emit_skip_and_exit "PR branch '${GITHUB_HEAD_REF}' is mate-originated — skipping to prevent self-referencing loop."
+  fi
+
+  # Checks 2-4: HEAD commit message patterns (work on any event).
+  # The [claude-mate pattern catches squash-merged commits (e.g., PR title
+  # "docs: ... [claude-mate:docs]"). The claude-mate/ pattern catches regular
+  # merge commits (e.g., "Merge pull request #N from vlad-ko/claude-mate/docs/...").
+  # Both forms mean "this commit came from a mate's own PR" — skip.
+  HEAD_MSG=$(git log -1 --format=%B HEAD 2>/dev/null || echo "")
+  if echo "$HEAD_MSG" | grep -qE '\[claude-mate|claude-mate/'; then
+    emit_skip_and_exit "HEAD commit is mate-authored (claude-mate marker in message) — skipping to prevent self-referencing loop."
+  fi
+  if echo "$HEAD_MSG" | grep -qF "[skip release]"; then
+    emit_skip_and_exit "HEAD commit carries [skip release] marker — release-automation commit, nothing for a drift mate to analyze."
+  fi
+  if echo "$HEAD_MSG" | grep -qE "^docs: Update CHANGELOG for v"; then
+    emit_skip_and_exit "HEAD commit is an auto-generated CHANGELOG update — nothing for a drift mate to analyze."
+  fi
+fi
+
+# ─── Schedule-only guard: "nothing human since last mate run" ───────────────
+# On scheduled runs specifically, skip if this mate has already contributed
+# after the last user-authored change. Prevents nightly echo-chamber drift
+# (mate reviewing its own prior output).
+#
+# Not applied on pull_request: on a PR, the PR's diff IS the human-authored
+# work; the guard above (PR branch / HEAD commit) already handles mate PRs.
 if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
   LAST_USER_COMMIT=$(git log --invert-grep \
       --grep='\[claude-mate' \
@@ -111,24 +176,12 @@ if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
 
   if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$LAST_USER_COMMIT" ] \
      && git merge-base --is-ancestor "$LAST_USER_COMMIT" "$LAST_MATE_COMMIT"; then
-    echo "=== Phase 0: Self-loop guard ==="
-    echo "Last user commit ($LAST_USER_COMMIT) is an ancestor of last ${MATE_NAME} mate commit ($LAST_MATE_COMMIT)."
-    echo "No human-authored work since this mate's last contribution — skipping."
-    # Emit outputs so downstream steps can branch on this.
-    if [ -n "${GITHUB_OUTPUT:-}" ]; then
-      {
-        echo "outcome=none"
-        echo "status=clean"
-        echo "issue-url="
-        echo "pr-url="
-      } >> "$GITHUB_OUTPUT"
-    fi
-    exit 0
+    emit_skip_and_exit "Last user commit ($LAST_USER_COMMIT) is an ancestor of last ${MATE_NAME} mate commit ($LAST_MATE_COMMIT). No human-authored work since this mate's last contribution."
   fi
-  echo "Phase 0: Self-loop guard passed — human commits exist since last mate run."
+  echo "Phase 0: Nightly self-loop guard passed — human commits exist since last mate run."
 fi
 
-echo "Phase 0: TRIGGER_CONTEXT enriched (since=${LAST_MATE_COMMIT:-<none>}, changed_files=${CHANGED_FILES_COUNT}, truncated=${CHANGED_FILES_TRUNCATED})"
+echo "Phase 0: event=${GITHUB_EVENT_NAME:-unknown}, TRIGGER_CONTEXT enriched (since=${LAST_MATE_COMMIT:-<none>}, changed_files=${CHANGED_FILES_COUNT}, truncated=${CHANGED_FILES_TRUNCATED})"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION — Read all mate settings from mate.yml and project config
