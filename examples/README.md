@@ -198,3 +198,71 @@ If you prefer to use Anthropic's action directly without going through claude-ma
 ```
 
 Claude Mates intentionally does **not** bundle a PR-scoped security workflow; the dedicated `claude-code-security-review` action is maintained by Anthropic and stays current with their model lineup.
+
+---
+
+## Running drift mates on pull requests (optional)
+
+By default, drift mates (docs, tests, dead-code, logic) run on a nightly cron because drift is a staleness concern that batches well. But **your trigger is your choice**: if you want per-PR feedback — e.g., the docs mate reviewing documentation drift before a PR merges — point the mate at `pull_request` instead of (or in addition to) `schedule`.
+
+```yaml
+name: "Mate: Docs (on PR)"
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: mate-docs-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 100
+      - uses: vlad-ko/claude-mates@v0.5.0   # or later
+        with:
+          mate: docs
+          api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
+```
+
+### Loop protection (framework-level, no config needed)
+
+The framework automatically refuses to run a drift mate on a PR when any of these hold:
+
+- The PR's source branch starts with `claude-mate/` — i.e., it IS a mate's own PR
+- The HEAD commit message contains `[claude-mate` — catches cherry-picked mate commits
+- The HEAD commit message contains `[skip release]` — release/CHANGELOG automation
+- The HEAD commit message starts with `docs: Update CHANGELOG for v` — defense-in-depth for the auto-CHANGELOG PR
+
+If any guard fires, the mate exits with `outcome: none, status: clean` and writes a one-line Job Summary explaining why. No Claude API call is made.
+
+### What it costs
+
+Running drift mates on every PR scales with PR throughput. A rough rule of thumb:
+
+| Cadence | Haiku (cheap) per mate | Sonnet per mate |
+|---|---|---|
+| Nightly (5 weekdays) | $2–$4 / month | $8–$12 / month |
+| Every PR (20/day) | $30–$60 / month | $120–$200 / month |
+
+If your repo is busy, prefer nightly batching. If it's low-throughput or docs-critical, per-PR gives faster feedback.
+
+### Side-effect awareness
+
+A drift mate that runs on a PR and finds things to fix will open its **own** PR (against `main`, not against the originating PR). You now have two PRs to manage — the original feature PR and the mate's cleanup PR. Some adopters find this useful (separation of concerns); others find it noisy. Choose the cadence that matches your workflow.
+
+Your options if the behavior doesn't fit:
+
+- Keep drift mates on `schedule` (simplest)
+- Run drift mates on PRs but with `paths:` filters so they only fire for relevant changes (e.g., docs mate only when `docs/**` changes)
+- Call the action from a composite step that routes the mate's findings to a PR comment instead of a new PR (requires custom wrapper — not built-in)
