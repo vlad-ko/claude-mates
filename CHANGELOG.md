@@ -2,6 +2,13 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.6.3] - 2026-04-12
+
+### Changed
+- test: Add Phase 0 integration harness for runner.sh self-loop guards
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.6.2...v0.6.3
+
 ## [0.6.1] - 2026-04-12
 
 ### Changed
