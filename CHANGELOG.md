@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.5.0] - 2026-04-12
+
+### Added
+- feat: Security mate becomes a thin wrapper over Anthropic's scanner
+
+### Changed
+- docs: Update CHANGELOG for v0.4.0 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.4.0...v0.5.0
+
 ## [0.4.0] - 2026-04-12
 
 ### Added
