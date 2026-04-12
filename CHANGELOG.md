@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.3.0] - 2026-04-12
+
+### Added
+- feat: Enrich TRIGGER_CONTEXT with since/changed_files metadata
+
+### Changed
+- docs: Update CHANGELOG for v0.2.7 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.2.7...v0.3.0
+
 ## [0.2.7] - 2026-04-12
 
 ### Fixed
