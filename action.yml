@@ -137,6 +137,40 @@ runs:
         } >> "$GITHUB_OUTPUT"
         echo "Security mate completed: findings-count=${FINDINGS}, outcome=${OUTCOME}"
 
+    # Always write a durable summary of the security scan as a tiny JSON file
+    # and upload it as a workflow artifact. The companion aftermath workflow
+    # (post-merge, on pull_request_target: closed, merged: true) downloads
+    # this artifact and opens a tracked issue if findings were still present
+    # at merge time. Uploaded even when findings=0 so the aftermath can
+    # distinguish "scan ran clean" from "scan never ran."
+    - name: Write security scan summary
+      if: inputs.mate == 'security'
+      shell: bash
+      run: |
+        FINDINGS="${{ steps.sec-run.outputs.findings-count }}"
+        FINDINGS="${FINDINGS:-0}"
+        cat > /tmp/security-summary.json <<EOF
+        {
+          "findings_count": ${FINDINGS},
+          "pr_number": "${{ github.event.pull_request.number }}",
+          "pr_url": "${{ github.event.pull_request.html_url }}",
+          "head_sha": "${{ github.event.pull_request.head.sha }}",
+          "scanner_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        }
+        EOF
+        cat /tmp/security-summary.json
+
+    - name: Upload security scan summary as artifact
+      if: inputs.mate == 'security'
+      uses: actions/upload-artifact@v7
+      with:
+        # Named by PR number so the aftermath workflow can find it
+        # deterministically from pull_request_target context.
+        name: security-findings-pr-${{ github.event.pull_request.number }}
+        path: /tmp/security-summary.json
+        retention-days: 90
+        if-no-files-found: error
+
     # ─── Drift mates (docs, tests, dead-code, logic): generic Claude CLI ───
     - name: Install Claude Code CLI
       if: inputs.mate != 'security'

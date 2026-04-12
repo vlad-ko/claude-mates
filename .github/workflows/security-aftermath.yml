@@ -1,0 +1,162 @@
+# Security aftermath — opens a tracked issue when a PR merges to main with
+# unresolved security findings.
+#
+# Rationale: the security mate posts inline PR comments and sets a required
+# status check. Most of the time that's enough — the PR blocks on findings
+# until they're addressed, then merges clean. But if an admin bypasses the
+# required check (or branch protection is weakened), findings land on main
+# with no persistent tracking. This workflow closes that gap.
+#
+# Flow:
+#   1. PR closes with merged=true
+#   2. Download the security-findings-pr-<N> artifact uploaded by the
+#      security mate's last run on this PR's head SHA
+#   3. If findings_count > 0, open an issue labeled claude-mate:security
+#      with links to the PR, merge commit, scanner run, and a remediation
+#      checklist
+#
+# The artifact is always uploaded by the security wrapper (even when
+# findings_count=0), so "no artifact" unambiguously means the security
+# scan never ran — which itself is worth flagging.
+#
+# This is a DOGFOOD workflow for claude-mates itself. Adopters copy the
+# equivalent into their own repos — see examples/README.md.
+
+name: Security Aftermath
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  issues: write
+  contents: read
+  actions: read  # Download artifacts from another workflow's run
+
+# Opt into Node.js 24 for JavaScript actions (upstream still on Node 20).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  aftermath:
+    # Only runs for merged PRs — close-without-merge is a non-event
+    # (findings were blocking, PR was abandoned, nothing landed).
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Look up security scan for this PR
+        id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Find the most recent Security Review workflow run for this
+          # PR's head SHA. If there are multiple (PR had multiple pushes),
+          # the API returns them newest-first, so head -1 is what we want.
+          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${SHA}&per_page=20" \
+            --jq '.workflow_runs[] | select(.name == "Security") | .id' | head -1)
+
+          if [ -z "$RUN_ID" ]; then
+            echo "No Security workflow run found for SHA ${SHA}"
+            echo "::warning::Security scan did not run for this PR's head SHA — merged without review."
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found Security run ${RUN_ID} for SHA ${SHA}"
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Download findings artifact
+        id: download
+        if: steps.lookup.outputs.run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.lookup.outputs.run_id }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p /tmp/findings
+          if ! gh run download "${RUN_ID}" \
+              --repo "${{ github.repository }}" \
+              -n "security-findings-pr-${PR}" \
+              -D /tmp/findings 2>/tmp/download-err.txt; then
+            echo "Could not download findings artifact:"
+            cat /tmp/download-err.txt
+            echo "::warning::Security scan artifact missing — older wrapper version?"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          cat /tmp/findings/security-summary.json
+
+      - name: Open issue if findings were merged
+        if: steps.download.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          MERGE_COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          COUNT=$(jq -r '.findings_count // 0' /tmp/findings/security-summary.json)
+          SCANNER_URL=$(jq -r '.scanner_run_url // empty' /tmp/findings/security-summary.json)
+          HEAD_SHA=$(jq -r '.head_sha // empty' /tmp/findings/security-summary.json)
+
+          if [ "$COUNT" -eq 0 ] 2>/dev/null; then
+            echo "Security scan: 0 findings at merge time. Clean — no issue needed."
+            exit 0
+          fi
+
+          echo "Security scan: ${COUNT} findings remained at merge time. Opening issue."
+
+          # Guard against duplicate issue (in the rare case this workflow
+          # runs twice for the same PR — re-run manual dispatch, etc.)
+          EXISTING=$(gh issue list --repo "${REPO}" \
+            --search "[claude-mate:security] merged via PR #${PR} in:title is:open" \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            echo "Existing open issue #${EXISTING} already covers PR #${PR} — skipping."
+            exit 0
+          fi
+
+          BODY=$(cat <<EOF
+          ## ${COUNT} security findings merged to \`main\` via PR #${PR}
+
+          The security mate scanner flagged **${COUNT} finding(s)** on PR #${PR}. Despite that, the PR was merged to \`main\`. These findings are now in production code and need attention.
+
+          ### Why this issue exists
+
+          Inline PR review comments are ephemeral — they disappear when the PR closes, and they're never surfaced from a long-running search like \`gh issue list --label claude-mate:security\`. This issue preserves the finding as a trackable work item.
+
+          ### Context
+
+          - **Merged PR**: ${PR_URL}
+          - **Head commit scanned**: \`${HEAD_SHA}\`
+          - **Merge commit**: \`${MERGE_COMMIT}\`
+          - **Scanner run (findings detail)**: ${SCANNER_URL}
+          - **Inline review comments**: see the "Files changed" tab on the PR
+
+          ### Why this was merged with findings
+
+          One of:
+          - The \`security\` required status check was overridden by a repo admin
+          - Branch protection was weakened to allow the merge
+          - The scanner runs on every push, so all later commits should have been re-checked — if the merge commit had findings, the check would have been red
+
+          ### Remediation checklist
+
+          - [ ] Review each finding in the PR's inline comments
+          - [ ] Open one or more follow-up PRs that fix the findings
+          - [ ] Re-run the security mate against \`main\` (via \`gh workflow run "Security" --ref main\`) and verify 0 findings
+          - [ ] Close this issue once findings are resolved
+
+          ---
+
+          *Opened automatically by \`.github/workflows/security-aftermath.yml\`. Powered by [Claude Mates](https://github.com/vlad-ko/claude-mates).*
+          EOF
+          )
+
+          gh issue create --repo "${REPO}" \
+            --title "[claude-mate:security] ${COUNT} finding(s) merged via PR #${PR}" \
+            --label "claude-mate:security" \
+            --body "${BODY}"
