@@ -2,6 +2,17 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.2.7] - 2026-04-12
+
+### Fixed
+- fix: Update pr-checks.yml for v0.3.0 file layout
+
+### Changed
+- docs: Documentation quality and staleness reviewer findings [claude-mate:docs]
+- docs: Update CHANGELOG for v0.2.6 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.2.6...v0.2.7
+
 ## [0.2.6] - 2026-04-12
 
 ### Fixed
