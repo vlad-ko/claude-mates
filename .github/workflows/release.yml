@@ -17,10 +17,14 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Skip mate commits, merge commits with [skip release], and badge/doc-only fixes
-    if: >-
-      !contains(github.event.head_commit.message, '[skip release]') &&
-      !contains(github.event.head_commit.message, '[claude-mate')
+    # Skip if:
+    #   - Commit message contains [skip release] (the intentional opt-out)
+    #   - Commit is from a claude-mate (prevents mate-triggered releases)
+    #   - Commit starts with "docs: Update CHANGELOG for v" (defense-in-depth
+    #     against the auto-CHANGELOG PR re-triggering the workflow, in case
+    #     someone edits the merge commit message and drops [skip release],
+    #     or the repo uses merge commits that don't inherit the PR title)
+    if: "!contains(github.event.head_commit.message, '[skip release]') && !contains(github.event.head_commit.message, '[claude-mate') && !startsWith(github.event.head_commit.message, 'docs: Update CHANGELOG for v')"
     # contents: write — for pushing tags and creating the GitHub Release
     # pull-requests: write — for opening the automated CHANGELOG PR after each release.
     # Both are required; the CHANGELOG PR step at the end of this job fails with
@@ -184,8 +188,14 @@ jobs:
           git commit -m "docs: Update CHANGELOG for ${NEW_TAG} [skip release]"
           git push origin "$BRANCH"
 
+          # [skip release] MUST be in the PR title — squash-merge commits
+          # use the PR title as the commit message, and even merge-commit
+          # strategies often inherit it. Without this marker, merging this
+          # PR would re-trigger the release workflow (because the merge
+          # commit message starts with "docs:" which is a valid bump
+          # prefix) and create an infinite release loop.
           gh pr create \
-            --title "docs: Update CHANGELOG for ${NEW_TAG}" \
+            --title "docs: Update CHANGELOG for ${NEW_TAG} [skip release]" \
             --body "Automated CHANGELOG update for release ${NEW_TAG}. Review and merge.\n\nRelease: https://github.com/${{ github.repository }}/releases/tag/${NEW_TAG}" \
             --base main \
             --head "$BRANCH" \
