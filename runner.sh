@@ -291,8 +291,33 @@ try:
             if isinstance(val, str) and val.strip():
                 print(val.strip())
                 sys.exit(0)
-    # If no result found, dump top-level keys for debugging
-    print('(no result text found — keys: ' + ', '.join(data.keys()) + ')')
+    # No content key populated. Classify from CLI metadata so downstream
+    # grep can distinguish real failure modes (max_turns, API errors,
+    # permission denials) from a genuine empty run.
+    is_error = data.get('is_error', False)
+    stop_reason = data.get('stop_reason') or data.get('terminal_reason') or ''
+    num_turns = data.get('num_turns', 0)
+    errors = data.get('errors') or []
+    denials = data.get('permission_denials') or []
+
+    if is_error or errors:
+        err_msg = ''
+        if errors and isinstance(errors, list):
+            first = errors[0]
+            if isinstance(first, dict):
+                err_msg = first.get('message') or first.get('type') or str(first)
+            else:
+                err_msg = str(first)
+        print(f'(cli error — stop_reason={stop_reason}, errors={err_msg})')
+    elif stop_reason in ('max_turns', 'end_turn_limit') or (num_turns and 'max' in str(stop_reason).lower()):
+        # Max turns: Claude hit the turn budget without emitting a final result.
+        # Treat as 'empty' — don't create half-baked issues.
+        print(f'(no result text found — max_turns reached after {num_turns} turns)')
+    elif denials:
+        print(f'(no result text found — {len(denials)} permission denial(s), stop_reason={stop_reason})')
+    else:
+        # Fall back to dumping top-level keys for debugging
+        print('(no result text found — keys: ' + ', '.join(data.keys()) + f', stop_reason={stop_reason}, num_turns={num_turns})')
 except Exception as e:
     print(f'(parse error: {e})')
 " 2>/dev/null || echo "(failed to parse Claude output)")
@@ -301,11 +326,12 @@ except Exception as e:
   # CODE-ENFORCED: Detect errors, empty results, and clean runs BEFORE
   # any issue creation. Don't rely on LLM output wording alone.
 
-  # Check for API/CLI errors in the output
-  if echo "$CLAUDE_RESULT" | grep -qiE "rate_limit_error|API Error|overloaded_error|server_error|authentication_error|invalid_api_key|connection_error|timeout"; then
+  # Check for API/CLI errors in the output (including structured CLI error metadata)
+  if echo "$CLAUDE_RESULT" | grep -qiE "rate_limit_error|API Error|overloaded_error|server_error|authentication_error|invalid_api_key|connection_error|timeout" \
+     || echo "$CLAUDE_RESULT" | grep -qE "^\(cli error"; then
     CLAUDE_STATUS="error"
     echo "::warning::Claude CLI returned an API error — skipping issue creation"
-  # Check for failed/empty output parsing
+  # Check for failed/empty output parsing (no result, parse error, max_turns, permission denials)
   elif echo "$CLAUDE_RESULT" | grep -qE "^\(no result text found|^\(parse error|^\(failed to parse"; then
     CLAUDE_STATUS="empty"
     echo "::warning::Claude output parsing failed — skipping issue creation"
@@ -345,10 +371,21 @@ PR_URL_OUT=""
 FILES_CHANGED_COUNT=0
 VIOLATIONS_FOUND=0
 
-# Collect all changed files (modified + untracked)
+# Collect all changed files (modified + untracked).
+# Exclude MATES_ROOT — when consumer repos check out the framework into a
+# subdirectory (e.g., .claude-mates-framework/), those files appear as
+# untracked but are NOT mate changes. This prevents phantom PRs.
 CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
 UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
 ALL_CHANGED=$(echo -e "${CHANGED_FILES}\n${UNTRACKED_FILES}" | sed '/^$/d' | sort -u)
+
+# Filter out MATES_ROOT if it's a subdirectory of the repo (not ".").
+# Normalize the path (strip leading ./ and trailing /) for reliable matching.
+if [ -n "$MATES_ROOT" ] && [ "$MATES_ROOT" != "." ] && [ "$MATES_ROOT" != "./" ]; then
+  MATES_ROOT_NORM="${MATES_ROOT#./}"
+  MATES_ROOT_NORM="${MATES_ROOT_NORM%/}"
+  ALL_CHANGED=$(echo "$ALL_CHANGED" | grep -v "^${MATES_ROOT_NORM}\(/\|$\)" || true)
+fi
 
 if [ -z "$ALL_CHANGED" ]; then
   echo "No file changes detected by Claude."
@@ -571,9 +608,11 @@ $([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}")"
     git push origin "${BRANCH_NAME}" 2>/dev/null
 
     # ═════════════════════════════════════════════════════════════════════
-    # Create PR — title and body driven by mate config
+    # Create PR — title uses conventional commit prefix first so it passes
+    # consumer repos' pr-title-check workflows and release automation.
+    # Format: "<prefix>: <description> [<label>:<mate>]"
     # ═════════════════════════════════════════════════════════════════════
-    PR_TITLE="[${LABEL_PREFIX}:${MATE_NAME}] ${MATE_DESC} fixes"
+    PR_TITLE="${COMMIT_PREFIX}: ${MATE_DESC} fixes [${LABEL_PREFIX}:${MATE_NAME}]"
     PR_BODY="## ${MATE_DESC} — Automated Fixes
 
 Fixes identified and applied by the \`${MATE_NAME}\` Claude Mate.
