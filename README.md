@@ -57,6 +57,9 @@ Repo **Settings → Actions → General → Workflow permissions**. Without this
 mates:
   docs:
     enabled: true
+    # max_window_hours: 24    # default — review files changed in last 24h
+                              # (override per-mate; e.g. 168 to "catch up
+                              # over a week" after an outage. No upper bound.)
   tests:
     enabled: true
   dead-code:
@@ -164,14 +167,14 @@ action.yml (composite)
         │ └─ else              → installs @anthropic-ai/claude-code CLI + invokes runner.sh
         ▼
 runner.sh  (drift mates: docs/tests/dead-code/logic)
-        │ ├─ Phase 0: self-loop guards + delta scope computation
+        │ ├─ Phase 0: self-loop guards + bounded delta window
         │ │           - self-loop guards: PR branch, HEAD commit patterns, CHANGELOG markers
-        │ │           - cursor = last mate contribution; window = files changed since
+        │ │           - window start = max(cursor, now - max_window_hours), default 24h
+        │ │           - if 24h window empty AND cursor exists → fall back to cursor
         │ │           - review set = window ∩ mate's allowed_paths
-        │ │           - skip-fast-path: cursor exists + review set empty → exit 0, zero API cost
-        │ ├─ Phase 1: Claude reviews ONLY the review set (told explicitly in prompt)
-        │ │           - First-ever run (no cursor): one-time bootstrap full scan
-        │ └─ Phase 2: shell validates, commits, opens branch/PR (findings-only → Job Summary, no issue)
+        │ │           - skip-fast-path: review set empty → exit 0, zero API cost
+        │ ├─ Phase 1: Claude reviews ONLY the review set (code-enforced in Phase 2)
+        │ └─ Phase 2: shell validates, commits, opens branch/PR; reverts edits outside window
         ▼
 $GITHUB_OUTPUT surfaces outcome + URLs + findings-count for downstream steps
 ```
@@ -186,7 +189,7 @@ See [examples/README.md](examples/README.md) for both per-mate and matrix patter
 
 1. **Mates never merge.** They propose (PR or findings comment). Humans decide.
 2. **Code enforces, prompts guide.** Hard rules (scope, protected paths, git isolation, self-loop detection) live in `runner.sh`. Prompts guide behavior only.
-3. **Delta review, not state query.** Each mate reviews only files that changed since its last contribution, intersected with its `allowed_paths`. Historical cleanup is for humans running Claude Code directly — mates are incremental reviewers, not full-repo auditors. First-ever run is a one-time bootstrap full scan; subsequent runs are delta-scoped.
+3. **Bounded delta review, never a full scan.** Each mate reviews files changed in the last `max_window_hours` (default 24, configurable per-mate via `.claude-mates.yml`), intersected with its `allowed_paths`. If the 24h window is empty AND a cursor (last mate contribution) exists, the window extends to the cursor — catches unreviewed bursts that predate the horizon. If both windows are empty, the run skips cleanly (zero API cost). Full-repo scans are forbidden by the framework — even on first run. Historical cleanup is for humans running Claude Code directly.
 4. **No file copying.** The action IS the integration — no `.claude-mates-framework/` checkout, no per-release template bumps.
 5. **No self-loops, across any trigger.** Framework-level guards fire on schedule, push, AND pull_request events. Mate-originated branches, automation-authored commits, and CHANGELOG PRs all skip cleanly. `workflow_dispatch` (manual) bypasses self-loop guards but still applies delta scope.
 6. **No issue-tracker noise.** Findings without a concrete fix render to the workflow log + Job Summary panel, not auto-filed GitHub issues. Only human-filed issues are tracked long-term.

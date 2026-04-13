@@ -28,28 +28,42 @@ if [ ! -f "$PROMPT_FILE" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PHASE 0: Cursor + window — the delta-scope contract
+# PHASE 0: Bounded delta window — the delta-only contract
 #
-# A mate reviews ONLY what changed since its last run. It is NOT a
-# state-query over the whole repo. Historical cleanup is for humans
-# running Claude Code directly; mates are delta reviewers.
+# Hard rule: a mate ALWAYS reviews a bounded delta. Full-repo scans are
+# forbidden — even on first run. Historical cleanup is for humans running
+# Claude Code directly; mates do simple cleanup of recent changes.
 #
-# Compute:
-#   - LAST_MATE_COMMIT: cursor = this mate's most recent contribution on
-#     HEAD's ancestry. Empty on first-ever run.
-#   - CHANGED_FILES:    files touched since the cursor (capped at 200).
-#   - REVIEW_SET:       CHANGED_FILES ∩ mate's allowed_paths (computed
-#                       later, after config loads). This is what the
-#                       mate is told to review.
+# Window-selection algorithm:
 #
-# Three cases downstream:
-#   1. Cursor exists, REVIEW_SET non-empty → run, prompt scopes to REVIEW_SET
-#   2. Cursor exists, REVIEW_SET empty     → skip clean, zero API cost
-#   3. Cursor missing (first run)          → bootstrap full scan, one time
+#   PRIMARY: max(cursor, now - MAX_WINDOW_HOURS) by recency.
+#            Whichever is more recent wins → smaller window → bounded cost.
 #
-# Self-loop guards (below) are a separate, pre-existing concern: don't
-# review mate-authored commits or release automation. Delta scope is the
-# review-amount question; self-loop guards are the should-we-run question.
+#   FALLBACK: if the primary window resolves to the N-hour cap and the
+#             cap produces ZERO changed files (no commits in last N hours),
+#             AND a cursor exists, extend the window to the cursor. This
+#             catches unreviewed work that predates the window horizon —
+#             e.g., a burst of commits three days ago with nothing since.
+#             The cap is a cost safety-net; when there's no cost to bound,
+#             don't waste the run.
+#
+#   SKIP:     only when BOTH primary and fallback produce zero changed
+#             files, OR when neither a cursor nor a cap exists (brand-new
+#             repo younger than the window horizon with no prior mate run).
+#             "Fully idle since last review" correctly skips.
+#
+# MAX_WINDOW_HOURS defaults to 24, configurable via .claude-mates.yml.
+# Adopters who want the mate to "catch up" after an outage can raise
+# this: e.g. max_window_hours: 168 for a week. No upper bound — their cost.
+#
+# Downstream cases:
+#   1. WINDOW_START set, REVIEW_SET non-empty → run, prompt scopes to it
+#   2. WINDOW_START set, REVIEW_SET empty     → skip clean, zero API cost
+#   3. WINDOW_START empty                     → skip clean (no window work)
+#
+# Self-loop guards (below) are a separate concern: don't review
+# mate-authored commits or release automation. Window scope is the
+# review-AMOUNT question; self-loop guards are the should-we-run question.
 #
 # "Automation commits" we ignore when finding the last human commit:
 #   - [claude-mate:*] — this mate or any other mate's merged PR
@@ -65,19 +79,82 @@ fi
 # have enough history to work with.
 git fetch --deepen 100 origin 2>/dev/null || true
 
-# Cursor: this mate's most recent contribution. Empty on first ever run
-# or after history rewrites that wiped the mate commits.
+# Cursor: this mate's most recent contribution on HEAD's ancestry.
+# Empty on first-ever run or after history rewrites that wiped the mate
+# commits. Kept separately from WINDOW_START because it's useful for
+# telemetry and for distinguishing "never ran" vs. "ran long ago".
 LAST_MATE_COMMIT=$(git log -1 --format=%H \
     --grep="\[claude-mate:${MATE_NAME}\]" 2>/dev/null || echo "")
 
-# Window: files touched between the cursor and HEAD. Only meaningful when
-# LAST_MATE_COMMIT exists. Capped at 200 entries to keep env-var/JSON size
-# reasonable; truncation is flagged in the metadata.
+# MAX_WINDOW_HOURS resolution (precedence):
+#   1. .claude-mates.yml → mates.<name>.max_window_hours (project override)
+#   2. mate.yml → max_window_hours (framework default)
+#   3. Hard fallback: 24
+MAX_WINDOW_HOURS=24
+if [ -f "$MATE_CONFIG" ]; then
+  MATE_MAX_WINDOW=$(python3 -c "
+import yaml
+with open('$MATE_CONFIG') as f:
+    config = yaml.safe_load(f)
+v = config.get('max_window_hours')
+if v is not None:
+    print(v)
+" 2>/dev/null || echo "")
+  if [ -n "$MATE_MAX_WINDOW" ]; then
+    MAX_WINDOW_HOURS="$MATE_MAX_WINDOW"
+  fi
+fi
+if [ -f "$CONFIG_PATH" ]; then
+  PROJECT_MAX_WINDOW=$(python3 -c "
+import yaml
+with open('$CONFIG_PATH') as f:
+    config = yaml.safe_load(f)
+mate_config = config.get('mates', {}).get('$MATE_NAME', {})
+v = mate_config.get('max_window_hours')
+if v is not None:
+    print(v)
+" 2>/dev/null || echo "")
+  if [ -n "$PROJECT_MAX_WINDOW" ]; then
+    MAX_WINDOW_HOURS="$PROJECT_MAX_WINDOW"
+  fi
+fi
+
+# Window cap: the most recent commit that is strictly OLDER than the
+# window horizon. Empty if the repo is brand-new (all commits younger
+# than the horizon) or has no history at all.
+WINDOW_CAP_SHA=$(git log -1 --format=%H --before="${MAX_WINDOW_HOURS} hours ago" 2>/dev/null || echo "")
+
+# WINDOW_START = max(cursor, cap) by recency. Whichever is newer bounds
+# the smaller window. Empty if both are empty → no delta → skip downstream.
+WINDOW_START=""
+WINDOW_SOURCE=""
+if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$WINDOW_CAP_SHA" ]; then
+  # Both exist. If cursor is an ancestor of the cap, cursor is older
+  # (further back in history) → cap is more recent → use cap.
+  if git merge-base --is-ancestor "$LAST_MATE_COMMIT" "$WINDOW_CAP_SHA" 2>/dev/null; then
+    WINDOW_START="$WINDOW_CAP_SHA"
+    WINDOW_SOURCE="${MAX_WINDOW_HOURS}h-cap"
+  else
+    WINDOW_START="$LAST_MATE_COMMIT"
+    WINDOW_SOURCE="cursor"
+  fi
+elif [ -n "$LAST_MATE_COMMIT" ]; then
+  # Cap doesn't apply (repo has no history older than the window horizon).
+  WINDOW_START="$LAST_MATE_COMMIT"
+  WINDOW_SOURCE="cursor"
+elif [ -n "$WINDOW_CAP_SHA" ]; then
+  WINDOW_START="$WINDOW_CAP_SHA"
+  WINDOW_SOURCE="${MAX_WINDOW_HOURS}h-fallback"
+fi
+# else: WINDOW_START remains empty → REVIEW_SET will be empty → skip.
+
+# CHANGED_FILES: files touched between WINDOW_START and HEAD.
+# Capped at 200 entries; truncation flagged in metadata.
 CHANGED_FILES=""
 CHANGED_FILES_COUNT=0
 CHANGED_FILES_TRUNCATED="false"
-if [ -n "$LAST_MATE_COMMIT" ]; then
-  ALL_CHANGED_LIST=$(git diff --name-only "${LAST_MATE_COMMIT}..HEAD" 2>/dev/null || echo "")
+if [ -n "$WINDOW_START" ]; then
+  ALL_CHANGED_LIST=$(git diff --name-only "${WINDOW_START}..HEAD" 2>/dev/null || echo "")
   CHANGED_FILES_COUNT=$(printf '%s\n' "$ALL_CHANGED_LIST" | sed '/^$/d' | wc -l | tr -d ' ')
   CHANGED_FILES=$(printf '%s\n' "$ALL_CHANGED_LIST" | sed '/^$/d' | head -200)
   if [ "$CHANGED_FILES_COUNT" -gt 200 ]; then
@@ -85,13 +162,40 @@ if [ -n "$LAST_MATE_COMMIT" ]; then
   fi
 fi
 
-# Enrich TRIGGER_CONTEXT JSON with since + changed_files (when available).
-# Python handles escaping correctly — never build JSON with string concat.
-if [ -n "$LAST_MATE_COMMIT" ]; then
+# ─── Cursor fallback ───────────────────────────────────────────────────────
+# When the primary window is the 24h cap (cursor is older than cap, OR no
+# cursor exists) AND the cap produced zero commits (no activity in the
+# window) AND a cursor exists → extend the window to the cursor. Rationale:
+# the cap is a cost-bounding safety net. If it produces nothing, it's
+# serving no purpose, and there may still be unreviewed work since the
+# last mate run. Extending to cursor catches it.
+#
+# Skip logic downstream (REVIEW_SET_COUNT=0) still fires if the cursor
+# window is also empty — that's the "fully idle since last review" case.
+if [ "$WINDOW_SOURCE" = "${MAX_WINDOW_HOURS}h-cap" ] \
+   && [ "$CHANGED_FILES_COUNT" -eq 0 ] \
+   && [ -n "$LAST_MATE_COMMIT" ]; then
+  WINDOW_START="$LAST_MATE_COMMIT"
+  WINDOW_SOURCE="cursor-fallback"
+  ALL_CHANGED_LIST=$(git diff --name-only "${WINDOW_START}..HEAD" 2>/dev/null || echo "")
+  CHANGED_FILES_COUNT=$(printf '%s\n' "$ALL_CHANGED_LIST" | sed '/^$/d' | wc -l | tr -d ' ')
+  CHANGED_FILES=$(printf '%s\n' "$ALL_CHANGED_LIST" | sed '/^$/d' | head -200)
+  if [ "$CHANGED_FILES_COUNT" -gt 200 ]; then
+    CHANGED_FILES_TRUNCATED="true"
+  fi
+fi
+
+# Enrich TRIGGER_CONTEXT JSON with the window metadata (observability).
+# `since` is WINDOW_START (what we're actually diffing against), not
+# LAST_MATE_COMMIT (which may or may not equal it).
+if [ -n "$WINDOW_START" ]; then
   TRIGGER_CONTEXT=$(
-    LAST_MATE_COMMIT="$LAST_MATE_COMMIT" \
+    WINDOW_START="$WINDOW_START" \
+    WINDOW_SOURCE="$WINDOW_SOURCE" \
     CHANGED_FILES="$CHANGED_FILES" \
     CHANGED_FILES_TRUNCATED="$CHANGED_FILES_TRUNCATED" \
+    LAST_MATE_COMMIT="$LAST_MATE_COMMIT" \
+    MAX_WINDOW_HOURS="$MAX_WINDOW_HOURS" \
     TRIGGER_CONTEXT="$TRIGGER_CONTEXT" \
     python3 -c "
 import json, os
@@ -99,7 +203,10 @@ try:
     tc = json.loads(os.environ.get('TRIGGER_CONTEXT') or '{}')
 except Exception:
     tc = {}
-tc['since'] = os.environ['LAST_MATE_COMMIT']
+tc['since'] = os.environ['WINDOW_START']
+tc['window_source'] = os.environ.get('WINDOW_SOURCE','')
+tc['last_mate_commit'] = os.environ.get('LAST_MATE_COMMIT','')
+tc['max_window_hours'] = int(os.environ.get('MAX_WINDOW_HOURS','24'))
 files = [f for f in os.environ.get('CHANGED_FILES','').splitlines() if f]
 tc['changed_files'] = files
 tc['changed_files_truncated'] = os.environ.get('CHANGED_FILES_TRUNCATED') == 'true'
@@ -108,11 +215,26 @@ print(json.dumps(tc))
 fi
 
 # ─── Helper: emit skip outputs and exit cleanly ─────────────────────────────
-# Used by all Phase 0 skip paths. Keeps output contract consistent.
+# Used by all Phase 0 self-loop paths. Keeps output contract consistent
+# with the bounded-window skip-fast-path below: structured banner, GitHub
+# Step Summary entry, contract outputs, exit 0.
 emit_skip_and_exit() {
   local reason="$1"
-  echo "=== Phase 0: Self-loop guard ==="
-  echo "$reason"
+  echo ""
+  echo "════════════════════════════════════════════════════════════════════════"
+  echo "  SKIP — Phase 0 self-loop guard fired"
+  echo "════════════════════════════════════════════════════════════════════════"
+  echo "  mate:           ${MATE_NAME}"
+  echo "  event:          ${GITHUB_EVENT_NAME:-unknown}"
+  echo ""
+  echo "  Reason:"
+  printf '  %s\n' "$reason" | fold -s -w 70 | sed '2,$s/^/  /'
+  echo ""
+  echo "  Action: exiting cleanly (outcome=none, status=clean). Zero API cost."
+  echo "          The framework prevents mates from reviewing their own output"
+  echo "          or release-automation commits."
+  echo "════════════════════════════════════════════════════════════════════════"
+
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
       echo "outcome=none"
@@ -123,9 +245,11 @@ emit_skip_and_exit() {
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-      echo "## ${MATE_NAME} — skipped"
+      echo "## ${MATE_NAME} — skipped (self-loop guard)"
       echo ""
-      echo "_${reason}_"
+      echo "${reason}"
+      echo ""
+      echo "_Outputs: \`outcome=none\`, \`status=clean\`. The framework prevents mates from reviewing their own output or release-automation commits._"
     } >> "$GITHUB_STEP_SUMMARY"
   fi
   exit 0
@@ -293,16 +417,17 @@ fi
 # DELTA SCOPE — intersect CHANGED_FILES with ALLOWED_PATHS
 #
 # REVIEW_SET is what the mate will be told to review. Cases:
-#   - Cursor present, intersection non-empty → populate REVIEW_SET,
+#   - WINDOW_START set, intersection non-empty → populate REVIEW_SET,
 #     prompt will scope to it (see "## Review Window" below).
-#   - Cursor present, intersection empty → skip clean. Nothing in this
-#     mate's scope has changed since last run; zero API cost.
-#   - Cursor missing (first run) → REVIEW_SET empty + no-cursor flag;
-#     prompt will tell the mate to do a one-time bootstrap full scan.
+#   - WINDOW_START set, intersection empty   → skip clean. Nothing in
+#     this mate's scope changed in the window; zero API cost.
+#   - WINDOW_START empty                     → skip clean. No eligible
+#     work (brand-new repo, or no commits older than the window
+#     horizon and no prior cursor). Zero API cost.
 # ═══════════════════════════════════════════════════════════════════════════
 REVIEW_SET=""
 REVIEW_SET_COUNT=0
-if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$CHANGED_FILES" ]; then
+if [ -n "$WINDOW_START" ] && [ -n "$CHANGED_FILES" ]; then
   if [ -n "$ALLOWED_PATHS" ]; then
     # Intersect: each changed file that matches any allowed_paths glob.
     REVIEW_SET=$(
@@ -323,21 +448,62 @@ for f in changed:
   REVIEW_SET_COUNT=$(printf '%s\n' "$REVIEW_SET" | sed '/^$/d' | wc -l | tr -d ' ')
 fi
 
+WINDOW_SHORT="<none>"
+if [ -n "$WINDOW_START" ]; then
+  WINDOW_SHORT="${WINDOW_START:0:7}"
+fi
 CURSOR_SHORT="<none>"
 if [ -n "$LAST_MATE_COMMIT" ]; then
   CURSOR_SHORT="${LAST_MATE_COMMIT:0:7}"
 fi
-echo "Delta scope: cursor=${CURSOR_SHORT}, window=${CHANGED_FILES_COUNT} files, review_set=${REVIEW_SET_COUNT} in-scope"
+echo "Delta window: start=${WINDOW_SHORT} (source=${WINDOW_SOURCE:-none}), cursor=${CURSOR_SHORT}, max_window=${MAX_WINDOW_HOURS}h, changed=${CHANGED_FILES_COUNT} files, review_set=${REVIEW_SET_COUNT} in-scope"
 
-# Skip-fast-path: cursor exists but nothing in scope changed.
-# Happens when every changed file is outside this mate's allowed_paths.
-# This is a pure win — no API cost for a confirmed no-op.
-if [ -n "$LAST_MATE_COMMIT" ] && [ "$REVIEW_SET_COUNT" -eq 0 ]; then
+# Skip-fast-path: no work in this mate's window. Three distinct kinds, each
+# gets a kind-specific reason so an operator reading the CI log a week later
+# can tell at a glance whether action is needed (almost always: no).
+#
+#   no_window      — cursor missing AND no commits older than horizon
+#                    (typical for brand-new repos under the window age)
+#   window_empty   — window resolved, but no commits between window start
+#                    and HEAD (idle or fully reviewed since cursor)
+#   none_in_scope  — commits exist in window, but none match allowed_paths
+#                    (activity is in other parts of the repo)
+if [ "$REVIEW_SET_COUNT" -eq 0 ]; then
+  CAP_SHORT="<none — repo younger than ${MAX_WINDOW_HOURS}h>"
+  if [ -n "$WINDOW_CAP_SHA" ]; then
+    CAP_SHORT="${WINDOW_CAP_SHA:0:7}"
+  fi
+
+  if [ -z "$WINDOW_START" ]; then
+    SKIP_KIND="no_window"
+    SKIP_REASON="No window could be established. The repo has no commits older than ${MAX_WINDOW_HOURS}h AND no prior mate run exists. This is typical for brand-new repos. The next scheduled run will pick up new activity once commits accumulate."
+  elif [ "$CHANGED_FILES_COUNT" -eq 0 ]; then
+    SKIP_KIND="window_empty"
+    SKIP_REASON="Window resolved to \`${WINDOW_SHORT}\` (${WINDOW_SOURCE}) but no files changed between there and HEAD. Either the repo has been idle since this point, or a previous mate run already reviewed everything. Nothing for this mate to do."
+  else
+    SKIP_KIND="none_in_scope"
+    ALLOWED_DISPLAY=$(echo "$ALLOWED_PATHS" | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+    SKIP_REASON="${CHANGED_FILES_COUNT} file(s) changed in window since \`${WINDOW_SHORT}\` (${WINDOW_SOURCE}), but NONE match this mate's allowed_paths (\`${ALLOWED_DISPLAY}\`). The activity is real, just outside this mate's domain."
+  fi
+
   echo ""
-  echo "=== Delta scope: nothing to review ==="
-  echo "Cursor: ${LAST_MATE_COMMIT:0:7}"
-  echo "${CHANGED_FILES_COUNT} file(s) changed since then, none within allowed_paths."
-  echo "Skipping Claude invocation — no drift possible in this mate's scope."
+  echo "════════════════════════════════════════════════════════════════════════"
+  echo "  SKIP — bounded delta window has nothing to review (kind: ${SKIP_KIND})"
+  echo "════════════════════════════════════════════════════════════════════════"
+  echo "  mate:           ${MATE_NAME}"
+  echo "  max_window:     ${MAX_WINDOW_HOURS}h"
+  echo "  cursor:         ${CURSOR_SHORT}"
+  echo "  ${MAX_WINDOW_HOURS}h cap:        ${CAP_SHORT}"
+  echo "  window:         ${WINDOW_SHORT} (source: ${WINDOW_SOURCE:-none})"
+  echo "  in window:      ${CHANGED_FILES_COUNT} files changed"
+  echo "  in mate scope:  ${REVIEW_SET_COUNT} files"
+  echo ""
+  echo "  Reason:"
+  printf '  %s\n' "$SKIP_REASON" | fold -s -w 70 | sed '2,$s/^/  /'
+  echo ""
+  echo "  Action: exiting cleanly (outcome=none, status=clean). Zero API cost."
+  echo "          Next scheduled run will reassess against latest HEAD."
+  echo "════════════════════════════════════════════════════════════════════════"
 
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
@@ -349,9 +515,22 @@ if [ -n "$LAST_MATE_COMMIT" ] && [ "$REVIEW_SET_COUNT" -eq 0 ]; then
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-      echo "## ${MATE_NAME} — no drift to review"
+      echo "## ${MATE_NAME} — skipped (no drift to review)"
       echo ""
-      echo "Cursor: \`${LAST_MATE_COMMIT:0:7}\` · ${CHANGED_FILES_COUNT} file(s) changed since, none in this mate's scope (\`$(echo "$ALLOWED_PATHS" | tr '\n' ', ' | sed 's/, $//')\`)."
+      echo "**Skip kind:** \`${SKIP_KIND}\`"
+      echo ""
+      echo "${SKIP_REASON}"
+      echo ""
+      echo "| | |"
+      echo "|---|---|"
+      echo "| max_window | ${MAX_WINDOW_HOURS}h |"
+      echo "| cursor | \`${CURSOR_SHORT}\` |"
+      echo "| ${MAX_WINDOW_HOURS}h cap | \`${CAP_SHORT}\` |"
+      echo "| window start | \`${WINDOW_SHORT}\` (${WINDOW_SOURCE:-none}) |"
+      echo "| files in window | ${CHANGED_FILES_COUNT} |"
+      echo "| files in mate scope | ${REVIEW_SET_COUNT} |"
+      echo ""
+      echo "_Outputs: \`outcome=none\`, \`status=clean\`. Next scheduled run will reassess._"
     } >> "$GITHUB_STEP_SUMMARY"
   fi
   exit 0
@@ -437,34 +616,30 @@ ${DENY_RULES}
 # REVIEW_SET are reverted. This prompt block tells the mate the contract
 # so it doesn't waste turns on edits that will be discarded. It is NOT
 # the enforcement — the runner's scope validator is.
-if [ -n "$LAST_MATE_COMMIT" ] && [ "$REVIEW_SET_COUNT" -gt 0 ]; then
-  REVIEW_FILE_LIST=$(printf '%s\n' "$REVIEW_SET" | sed '/^$/d' | sed 's/^/- /')
-  TRUNC_NOTE=""
-  if [ "$CHANGED_FILES_TRUNCATED" = "true" ]; then
-    TRUNC_NOTE="
-(Window since cursor contained >200 files; first 200 in-scope shown.)"
-  fi
+#
+# This block always renders when we reach Phase 1 — the skip-fast-path
+# above already exited if there was nothing to review. No "bootstrap
+# full scan" branch exists: mates NEVER scan the whole repo.
+REVIEW_FILE_LIST=$(printf '%s\n' "$REVIEW_SET" | sed '/^$/d' | sed 's/^/- /')
+TRUNC_NOTE=""
+if [ "$CHANGED_FILES_TRUNCATED" = "true" ]; then
+  TRUNC_NOTE="
+(Window contained >200 files; first 200 in-scope shown.)"
+fi
 
-  FULL_PROMPT="${FULL_PROMPT}
+FULL_PROMPT="${FULL_PROMPT}
 
-## Review Window (code-enforced)
+## Review Window (code-enforced, bounded delta)
 
-Cursor: \`${LAST_MATE_COMMIT:0:7}\`
+Window start: \`${WINDOW_START:0:7}\` (source: ${WINDOW_SOURCE}, max_window_hours=${MAX_WINDOW_HOURS})
 Files in review window (${REVIEW_SET_COUNT}):
 
 ${REVIEW_FILE_LIST}${TRUNC_NOTE}
 
 The runner reverts any edit to a file not in this list. Work the list.
 You may read other files for reference; edits outside the window are
-discarded automatically."
-elif [ -z "$LAST_MATE_COMMIT" ]; then
-  FULL_PROMPT="${FULL_PROMPT}
-
-## Review Window — first run (bootstrap)
-
-No prior cursor. One-time bootstrap scan; next run delta-scopes.
-Prioritize obvious, high-confidence findings."
-fi
+discarded automatically. Full-repo scans are forbidden by the framework —
+historical cleanup is for humans running Claude Code directly."
 
 # Read skills from project config
 SKILLS_NOTE=""
@@ -816,15 +991,15 @@ for f in changed:
 
   # ═══════════════════════════════════════════════════════════════════════
   # HARD RULE: Review-window enforcement — only allow edits to files that
-  # changed since the mate's last run (REVIEW_SET). Claude may read files
-  # outside this window (for context) but edits there are REVERTED. This
-  # is the code-side teeth for delta scope; the prompt's "review only
-  # these files" is guidance, this is enforcement.
+  # changed within the bounded delta window (REVIEW_SET). Claude may read
+  # files outside this window (for context) but edits there are REVERTED.
+  # This is the code-side teeth for delta scope; the prompt's "review
+  # only these files" is guidance, this is enforcement.
   #
-  # Skipped when there's no cursor (first-ever bootstrap run) — no delta
-  # to enforce against; allowed_paths handles scope in that case.
+  # Always runs: if the runner reached Phase 2, there's a non-empty
+  # REVIEW_SET (the skip-fast-path in Phase 0 handles empty windows).
   # ═══════════════════════════════════════════════════════════════════════
-  if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$REVIEW_SET" ]; then
+  if [ -n "$WINDOW_START" ] && [ -n "$REVIEW_SET" ]; then
     echo ""
     echo "--- Validating review window ---"
 
