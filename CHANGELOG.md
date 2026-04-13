@@ -2,6 +2,19 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.8.0] - 2026-04-13
+
+### Added
+- feat: Scope mates to delta (changed files since last run)
+
+### Fixed
+- fix: Code-enforce the review window in Phase 2 (not just prompt)
+
+### Changed
+- docs: Update CHANGELOG for v0.7.2 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.7.2...v0.8.0
+
 ## [0.7.2] - 2026-04-13
 
 ### Fixed
