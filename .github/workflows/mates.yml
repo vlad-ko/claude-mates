@@ -61,21 +61,31 @@ jobs:
 
       - name: Log outcome
         if: always()
+        # Pass action outputs through env vars rather than interpolating
+        # `${{ }}` directly into the run: shell block. `${{ }}` substitution
+        # happens BEFORE bash sees the command, so any shell metacharacters
+        # in the value would be executed. Env-var references (`$VAR`) are
+        # inert — bash treats the value as data, never as code. Ported from
+        # Bug Bot finding on webo PR #1507.
+        #
+        # Also guarded with `if` blocks rather than `A && echo` short-circuits.
+        # When the variable is empty, `[ -n "" ]` exits 1 and the `&& echo`
+        # chain short-circuits. Under bash -e (GitHub Actions' default shell
+        # for run: blocks), a non-zero exit at the end of the script fails
+        # the step — even though the mate itself succeeded.
+        env:
+          OUTCOME: ${{ steps.mate.outputs.outcome }}
+          STATUS: ${{ steps.mate.outputs.status }}
+          ISSUE_URL: ${{ steps.mate.outputs.issue-url }}
+          PR_URL: ${{ steps.mate.outputs.pr-url }}
         run: |
-          echo "Outcome: ${{ steps.mate.outputs.outcome }}"
-          echo "Status:  ${{ steps.mate.outputs.status }}"
-          # Guarded with `if` blocks rather than `A && echo` short-circuits.
-          # When the variable is empty, `[ -n "" ]` exits 1 and the `&& echo`
-          # chain short-circuits with exit 1. Under bash -e (GitHub Actions'
-          # default shell for run: blocks), a non-zero exit at the end of the
-          # script fails the step — even though the mate itself succeeded.
-          # This was flagged on webo by Bug Bot on merge of PR #1507 and
-          # applies identically here in the dogfood workflow.
-          if [ -n "${{ steps.mate.outputs.issue-url }}" ]; then
-            echo "Issue: ${{ steps.mate.outputs.issue-url }}"
+          echo "Outcome: $OUTCOME"
+          echo "Status:  $STATUS"
+          if [ -n "$ISSUE_URL" ]; then
+            echo "Issue: $ISSUE_URL"
           fi
-          if [ -n "${{ steps.mate.outputs.pr-url }}" ]; then
-            echo "PR:    ${{ steps.mate.outputs.pr-url }}"
+          if [ -n "$PR_URL" ]; then
+            echo "PR:    $PR_URL"
           fi
 
       - uses: actions/upload-artifact@v7
