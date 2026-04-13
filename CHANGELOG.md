@@ -2,6 +2,19 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.9.0] - 2026-04-13
+
+### Added
+- feat: Bounded delta window with cursor fallback (max_window_hours)
+
+### Fixed
+- fix: Skip exits emit structured banner with kind, facts, and reason
+
+### Changed
+- docs: Update CHANGELOG for v0.8.0 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.8.0...v0.9.0
+
 ## [0.8.0] - 2026-04-13
 
 ### Added
