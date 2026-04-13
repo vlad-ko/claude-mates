@@ -28,29 +28,36 @@ if [ ! -f "$PROMPT_FILE" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PHASE 0: History lookups — cursor + window, then self-loop guard
+# PHASE 0: Cursor + window — the delta-scope contract
 #
-# Deepen history, compute LAST_MATE_COMMIT (the cursor for this mate's
-# previous contribution), compute CHANGED_FILES (the window since that
-# cursor), and enrich TRIGGER_CONTEXT with those as metadata.
+# A mate reviews ONLY what changed since its last run. It is NOT a
+# state-query over the whole repo. Historical cleanup is for humans
+# running Claude Code directly; mates are delta reviewers.
 #
-# The metadata is ADVISORY ONLY — prompts are not told to scope to it.
-# This preserves the state-query correctness contract: mates read HEAD
-# state and find drift everywhere, not just in the recent window. The
-# metadata lives in TRIGGER_CONTEXT so future prompt work (or downstream
-# analytics) can reference it without changing today's behavior.
+# Compute:
+#   - LAST_MATE_COMMIT: cursor = this mate's most recent contribution on
+#     HEAD's ancestry. Empty on first-ever run.
+#   - CHANGED_FILES:    files touched since the cursor (capped at 200).
+#   - REVIEW_SET:       CHANGED_FILES ∩ mate's allowed_paths (computed
+#                       later, after config loads). This is what the
+#                       mate is told to review.
 #
-# Cost guards remain: --allowedTools, allowed_paths, max_turns. The window
-# is not a scope boundary — it's information.
+# Three cases downstream:
+#   1. Cursor exists, REVIEW_SET non-empty → run, prompt scopes to REVIEW_SET
+#   2. Cursor exists, REVIEW_SET empty     → skip clean, zero API cost
+#   3. Cursor missing (first run)          → bootstrap full scan, one time
+#
+# Self-loop guards (below) are a separate, pre-existing concern: don't
+# review mate-authored commits or release automation. Delta scope is the
+# review-amount question; self-loop guards are the should-we-run question.
 #
 # "Automation commits" we ignore when finding the last human commit:
 #   - [claude-mate:*] — this mate or any other mate's merged PR
 #   - docs: Update CHANGELOG for v... — release automation's CHANGELOG PR
 #   - [skip release] — explicit opt-out marker
 #
-# The self-loop SKIP is gated on schedule events only. workflow_dispatch
-# (manual) and push always proceed — a human explicitly asked, or a real
-# push happened, and they deserve the full run.
+# Self-loop SKIP is gated on schedule events only. workflow_dispatch and
+# push always proceed — a human asked, or a real push happened.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Deepen history once (idempotent; no-op if already deep enough). Runs on
@@ -183,15 +190,6 @@ fi
 
 echo "Phase 0: event=${GITHUB_EVENT_NAME:-unknown}, TRIGGER_CONTEXT enriched (since=${LAST_MATE_COMMIT:-<none>}, changed_files=${CHANGED_FILES_COUNT}, truncated=${CHANGED_FILES_TRUNCATED})"
 
-# ─── Test mode: exit after Phase 0 completes ────────────────────────────────
-# Used by tests/runner_phase0_test.sh to exercise the self-loop guard
-# deterministically without invoking the Claude CLI or gh. Not intended for
-# production use — no code path other than the test harness sets this.
-if [ "${MATE_TEST_MODE:-}" = "phase0-only" ]; then
-  echo "Phase 0 complete — exiting in MATE_TEST_MODE=phase0-only"
-  exit 0
-fi
-
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION — Read all mate settings from mate.yml and project config
 # Hard rules are read here, enforced in Phase 2.
@@ -291,6 +289,84 @@ if [ -n "$ALLOWED_PATHS" ]; then
   echo "Allowed paths: $(echo "$ALLOWED_PATHS" | tr '\n' ', ')"
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DELTA SCOPE — intersect CHANGED_FILES with ALLOWED_PATHS
+#
+# REVIEW_SET is what the mate will be told to review. Cases:
+#   - Cursor present, intersection non-empty → populate REVIEW_SET,
+#     prompt will scope to it (see "## Review Window" below).
+#   - Cursor present, intersection empty → skip clean. Nothing in this
+#     mate's scope has changed since last run; zero API cost.
+#   - Cursor missing (first run) → REVIEW_SET empty + no-cursor flag;
+#     prompt will tell the mate to do a one-time bootstrap full scan.
+# ═══════════════════════════════════════════════════════════════════════════
+REVIEW_SET=""
+REVIEW_SET_COUNT=0
+if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$CHANGED_FILES" ]; then
+  if [ -n "$ALLOWED_PATHS" ]; then
+    # Intersect: each changed file that matches any allowed_paths glob.
+    REVIEW_SET=$(
+      CHANGED_FILES="$CHANGED_FILES" \
+      ALLOWED_PATHS="$ALLOWED_PATHS" \
+      python3 -c "
+import fnmatch, os
+changed = [f for f in os.environ.get('CHANGED_FILES','').splitlines() if f]
+allowed = [p.strip() for p in os.environ.get('ALLOWED_PATHS','').splitlines() if p.strip()]
+for f in changed:
+    if any(fnmatch.fnmatch(f, pat) for pat in allowed):
+        print(f)
+" 2>/dev/null || echo "")
+  else
+    # No allowed_paths configured — all changed files are in scope.
+    REVIEW_SET="$CHANGED_FILES"
+  fi
+  REVIEW_SET_COUNT=$(printf '%s\n' "$REVIEW_SET" | sed '/^$/d' | wc -l | tr -d ' ')
+fi
+
+CURSOR_SHORT="<none>"
+if [ -n "$LAST_MATE_COMMIT" ]; then
+  CURSOR_SHORT="${LAST_MATE_COMMIT:0:7}"
+fi
+echo "Delta scope: cursor=${CURSOR_SHORT}, window=${CHANGED_FILES_COUNT} files, review_set=${REVIEW_SET_COUNT} in-scope"
+
+# Skip-fast-path: cursor exists but nothing in scope changed.
+# Happens when every changed file is outside this mate's allowed_paths.
+# This is a pure win — no API cost for a confirmed no-op.
+if [ -n "$LAST_MATE_COMMIT" ] && [ "$REVIEW_SET_COUNT" -eq 0 ]; then
+  echo ""
+  echo "=== Delta scope: nothing to review ==="
+  echo "Cursor: ${LAST_MATE_COMMIT:0:7}"
+  echo "${CHANGED_FILES_COUNT} file(s) changed since then, none within allowed_paths."
+  echo "Skipping Claude invocation — no drift possible in this mate's scope."
+
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    {
+      echo "outcome=none"
+      echo "status=clean"
+      echo "issue-url="
+      echo "pr-url="
+    } >> "$GITHUB_OUTPUT"
+  fi
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "## ${MATE_NAME} — no drift to review"
+      echo ""
+      echo "Cursor: \`${LAST_MATE_COMMIT:0:7}\` · ${CHANGED_FILES_COUNT} file(s) changed since, none in this mate's scope (\`$(echo "$ALLOWED_PATHS" | tr '\n' ', ' | sed 's/, $//')\`)."
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+  exit 0
+fi
+
+# ─── Test mode: exit after Phase 0 + config + delta scope completes ─────────
+# Used by tests/runner_phase0_test.sh to exercise Phase 0 guards AND the
+# delta-scope skip-fast-path deterministically without invoking the Claude
+# CLI or gh. Not for production use — only the test harness sets this.
+if [ "${MATE_TEST_MODE:-}" = "phase0-only" ]; then
+  echo "Phase 0 complete — exiting in MATE_TEST_MODE=phase0-only"
+  exit 0
+fi
+
+
 # Read deny rules from project config (injected as prompt defense-in-depth)
 DENY_RULES=""
 if [ -f "$CONFIG_PATH" ]; then
@@ -355,6 +431,40 @@ ${DENY_RULES}
 - NEVER modify .env files
 - Max 1 PR per run
 - Max 1 issue per run"
+
+# ─── Review Window: inform the mate what code enforces ─────────────────────
+# The review window is CODE-ENFORCED in Phase 2: edits to files outside
+# REVIEW_SET are reverted. This prompt block tells the mate the contract
+# so it doesn't waste turns on edits that will be discarded. It is NOT
+# the enforcement — the runner's scope validator is.
+if [ -n "$LAST_MATE_COMMIT" ] && [ "$REVIEW_SET_COUNT" -gt 0 ]; then
+  REVIEW_FILE_LIST=$(printf '%s\n' "$REVIEW_SET" | sed '/^$/d' | sed 's/^/- /')
+  TRUNC_NOTE=""
+  if [ "$CHANGED_FILES_TRUNCATED" = "true" ]; then
+    TRUNC_NOTE="
+(Window since cursor contained >200 files; first 200 in-scope shown.)"
+  fi
+
+  FULL_PROMPT="${FULL_PROMPT}
+
+## Review Window (code-enforced)
+
+Cursor: \`${LAST_MATE_COMMIT:0:7}\`
+Files in review window (${REVIEW_SET_COUNT}):
+
+${REVIEW_FILE_LIST}${TRUNC_NOTE}
+
+The runner reverts any edit to a file not in this list. Work the list.
+You may read other files for reference; edits outside the window are
+discarded automatically."
+elif [ -z "$LAST_MATE_COMMIT" ]; then
+  FULL_PROMPT="${FULL_PROMPT}
+
+## Review Window — first run (bootstrap)
+
+No prior cursor. One-time bootstrap scan; next run delta-scopes.
+Prioritize obvious, high-confidence findings."
+fi
 
 # Read skills from project config
 SKILLS_NOTE=""
@@ -701,6 +811,58 @@ for f in changed:
       done <<< "$SCOPE_VIOLATIONS"
     else
       echo "All changes within allowed scope."
+    fi
+  fi
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # HARD RULE: Review-window enforcement — only allow edits to files that
+  # changed since the mate's last run (REVIEW_SET). Claude may read files
+  # outside this window (for context) but edits there are REVERTED. This
+  # is the code-side teeth for delta scope; the prompt's "review only
+  # these files" is guidance, this is enforcement.
+  #
+  # Skipped when there's no cursor (first-ever bootstrap run) — no delta
+  # to enforce against; allowed_paths handles scope in that case.
+  # ═══════════════════════════════════════════════════════════════════════
+  if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$REVIEW_SET" ]; then
+    echo ""
+    echo "--- Validating review window ---"
+
+    # Re-collect after previous reverts
+    CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
+    UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+    ALL_CHANGED=$(echo -e "${CHANGED_FILES}\n${UNTRACKED_FILES}" | sed '/^$/d' | sort -u)
+
+    # Files Claude edited that aren't in the review set = window violations
+    WINDOW_VIOLATIONS=$(
+      CLAUDE_CHANGED="$ALL_CHANGED" \
+      REVIEW_SET_ENV="$REVIEW_SET" \
+      python3 -c "
+import os
+changed = set(f for f in os.environ.get('CLAUDE_CHANGED','').splitlines() if f)
+review  = set(f for f in os.environ.get('REVIEW_SET_ENV','').splitlines() if f)
+for f in sorted(changed - review):
+    print(f)
+" 2>/dev/null || echo "")
+
+    if [ -n "$WINDOW_VIOLATIONS" ]; then
+      echo "::warning::Mate '$MATE_NAME' edited files outside the review window — reverting:"
+      echo "$WINDOW_VIOLATIONS"
+      WINDOW_VIOLATION_COUNT=$(echo "$WINDOW_VIOLATIONS" | wc -l | tr -d ' ')
+      VIOLATIONS_FOUND=$((VIOLATIONS_FOUND + WINDOW_VIOLATION_COUNT))
+
+      while IFS= read -r file; do
+        if [ -n "$file" ]; then
+          if git ls-files --error-unmatch "$file" 2>/dev/null; then
+            git checkout -- "$file" 2>/dev/null || true
+          else
+            rm -f "$file" 2>/dev/null || true
+          fi
+          echo "  Reverted: $file (not in review window)"
+        fi
+      done <<< "$WINDOW_VIOLATIONS"
+    else
+      echo "All edits within review window."
     fi
   fi
 

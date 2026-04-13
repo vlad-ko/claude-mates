@@ -164,9 +164,13 @@ action.yml (composite)
         │ └─ else              → installs @anthropic-ai/claude-code CLI + invokes runner.sh
         ▼
 runner.sh  (drift mates: docs/tests/dead-code/logic)
-        │ ├─ Phase 0: self-loop guards (event-agnostic — PR branch, HEAD commit patterns, CHANGELOG markers)
-        │ │           schedule: extra "no human work since last mate run" check
-        │ ├─ Phase 1: Claude analyzes repo, edits files (tool-scoped via --allowedTools)
+        │ ├─ Phase 0: self-loop guards + delta scope computation
+        │ │           - self-loop guards: PR branch, HEAD commit patterns, CHANGELOG markers
+        │ │           - cursor = last mate contribution; window = files changed since
+        │ │           - review set = window ∩ mate's allowed_paths
+        │ │           - skip-fast-path: cursor exists + review set empty → exit 0, zero API cost
+        │ ├─ Phase 1: Claude reviews ONLY the review set (told explicitly in prompt)
+        │ │           - First-ever run (no cursor): one-time bootstrap full scan
         │ └─ Phase 2: shell validates, commits, opens branch/PR (findings-only → Job Summary, no issue)
         ▼
 $GITHUB_OUTPUT surfaces outcome + URLs + findings-count for downstream steps
@@ -182,12 +186,13 @@ See [examples/README.md](examples/README.md) for both per-mate and matrix patter
 
 1. **Mates never merge.** They propose (PR or findings comment). Humans decide.
 2. **Code enforces, prompts guide.** Hard rules (scope, protected paths, git isolation, self-loop detection) live in `runner.sh`. Prompts guide behavior only.
-3. **No file copying.** The action IS the integration — no `.claude-mates-framework/` checkout, no per-release template bumps.
-4. **No self-loops, across any trigger.** Framework-level guards fire on schedule, push, AND pull_request events. Mate-originated branches, automation-authored commits, and CHANGELOG PRs all skip cleanly. `workflow_dispatch` (manual) always proceeds.
-5. **No issue-tracker noise.** Findings without a concrete fix render to the workflow log + Job Summary panel, not auto-filed GitHub issues. Only human-filed issues are tracked long-term.
-6. **Specialized tools for specialized jobs.** The security mate is a thin wrapper over Anthropic's `claude-code-security-review` — battle-tested, diff-aware, FP-filtered. We don't re-invent; we integrate.
-7. **Cost-bounded.** Per-mate model selection, per-mate max-turns, `allowed_paths` scope cap, `--allowedTools` tool cap. Self-loop guard skips runs that would produce no signal.
-8. **Observable.** Every run writes `/tmp/mate-*-summary.json` (uploaded as artifact), populates GitHub Job Summary, and surfaces structured action outputs for downstream steps.
+3. **Delta review, not state query.** Each mate reviews only files that changed since its last contribution, intersected with its `allowed_paths`. Historical cleanup is for humans running Claude Code directly — mates are incremental reviewers, not full-repo auditors. First-ever run is a one-time bootstrap full scan; subsequent runs are delta-scoped.
+4. **No file copying.** The action IS the integration — no `.claude-mates-framework/` checkout, no per-release template bumps.
+5. **No self-loops, across any trigger.** Framework-level guards fire on schedule, push, AND pull_request events. Mate-originated branches, automation-authored commits, and CHANGELOG PRs all skip cleanly. `workflow_dispatch` (manual) bypasses self-loop guards but still applies delta scope.
+6. **No issue-tracker noise.** Findings without a concrete fix render to the workflow log + Job Summary panel, not auto-filed GitHub issues. Only human-filed issues are tracked long-term.
+7. **Specialized tools for specialized jobs.** The security mate is a thin wrapper over Anthropic's `claude-code-security-review` — battle-tested, diff-aware, FP-filtered. We don't re-invent; we integrate.
+8. **Cost-bounded.** Per-mate model selection, per-mate max-turns, `allowed_paths` scope cap, `--allowedTools` tool cap. Delta scope + self-loop guard skip any run that would produce no signal.
+9. **Observable.** Every run writes `/tmp/mate-*-summary.json` (uploaded as artifact), populates GitHub Job Summary, and surfaces structured action outputs for downstream steps.
 
 ## Upgrading
 
