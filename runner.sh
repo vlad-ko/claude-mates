@@ -432,51 +432,38 @@ ${DENY_RULES}
 - Max 1 PR per run
 - Max 1 issue per run"
 
-# ─── Review Window: scope the mate to files changed since last run ──────────
-# This is the delta-scope contract. When a cursor exists, explicitly tell the
-# mate which files to review and that it MUST NOT survey the rest of the
-# repo. When no cursor exists (first-ever run), tell the mate this is a
-# one-time bootstrap full scan.
+# ─── Review Window: inform the mate what code enforces ─────────────────────
+# The review window is CODE-ENFORCED in Phase 2: edits to files outside
+# REVIEW_SET are reverted. This prompt block tells the mate the contract
+# so it doesn't waste turns on edits that will be discarded. It is NOT
+# the enforcement — the runner's scope validator is.
 if [ -n "$LAST_MATE_COMMIT" ] && [ "$REVIEW_SET_COUNT" -gt 0 ]; then
-  # Format file list (one per line, bullet-prefixed)
   REVIEW_FILE_LIST=$(printf '%s\n' "$REVIEW_SET" | sed '/^$/d' | sed 's/^/- /')
   TRUNC_NOTE=""
   if [ "$CHANGED_FILES_TRUNCATED" = "true" ]; then
     TRUNC_NOTE="
-(Note: the window since the cursor contained >200 files; only the first 200 that match allowed_paths are listed here. Prioritize the files you can see.)"
+(Window since cursor contained >200 files; first 200 in-scope shown.)"
   fi
 
   FULL_PROMPT="${FULL_PROMPT}
 
-## Review Window — scope is delta since last run
+## Review Window (code-enforced)
 
-Cursor (your last contribution): \`${LAST_MATE_COMMIT:0:7}\`
-Files changed since then that fall within your allowed scope (${REVIEW_SET_COUNT}):
+Cursor: \`${LAST_MATE_COMMIT:0:7}\`
+Files in review window (${REVIEW_SET_COUNT}):
 
 ${REVIEW_FILE_LIST}${TRUNC_NOTE}
 
-**Review ONLY the files listed above.** Do NOT scan, grep, or survey the rest
-of the repository. Historical cleanup is for humans running Claude Code
-directly — your job is a focused delta review.
-
-You MAY read other files that the listed files directly reference, if you
-need to judge correctness (e.g. the class a test references, the model a
-docstring describes). But do NOT initiate broad repo surveys, dir-wide
-greps, or 'let me get a feel for the codebase' passes.
-
-If you review the listed files and find nothing to fix, exit cleanly and
-say so — that's a valid and desirable outcome."
+The runner reverts any edit to a file not in this list. Work the list.
+You may read other files for reference; edits outside the window are
+discarded automatically."
 elif [ -z "$LAST_MATE_COMMIT" ]; then
   FULL_PROMPT="${FULL_PROMPT}
 
 ## Review Window — first run (bootstrap)
 
-No prior mate contribution found in history. This is a one-time bootstrap
-full scan. Subsequent runs will be scoped to files changed since this run.
-
-Keep the scan focused: prioritize obvious, high-confidence findings over
-exhaustive exploration. A partial sweep now is better than an exhausted
-turn budget with nothing to show for it."
+No prior cursor. One-time bootstrap scan; next run delta-scopes.
+Prioritize obvious, high-confidence findings."
 fi
 
 # Read skills from project config
@@ -824,6 +811,58 @@ for f in changed:
       done <<< "$SCOPE_VIOLATIONS"
     else
       echo "All changes within allowed scope."
+    fi
+  fi
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # HARD RULE: Review-window enforcement — only allow edits to files that
+  # changed since the mate's last run (REVIEW_SET). Claude may read files
+  # outside this window (for context) but edits there are REVERTED. This
+  # is the code-side teeth for delta scope; the prompt's "review only
+  # these files" is guidance, this is enforcement.
+  #
+  # Skipped when there's no cursor (first-ever bootstrap run) — no delta
+  # to enforce against; allowed_paths handles scope in that case.
+  # ═══════════════════════════════════════════════════════════════════════
+  if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$REVIEW_SET" ]; then
+    echo ""
+    echo "--- Validating review window ---"
+
+    # Re-collect after previous reverts
+    CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
+    UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+    ALL_CHANGED=$(echo -e "${CHANGED_FILES}\n${UNTRACKED_FILES}" | sed '/^$/d' | sort -u)
+
+    # Files Claude edited that aren't in the review set = window violations
+    WINDOW_VIOLATIONS=$(
+      CLAUDE_CHANGED="$ALL_CHANGED" \
+      REVIEW_SET_ENV="$REVIEW_SET" \
+      python3 -c "
+import os
+changed = set(f for f in os.environ.get('CLAUDE_CHANGED','').splitlines() if f)
+review  = set(f for f in os.environ.get('REVIEW_SET_ENV','').splitlines() if f)
+for f in sorted(changed - review):
+    print(f)
+" 2>/dev/null || echo "")
+
+    if [ -n "$WINDOW_VIOLATIONS" ]; then
+      echo "::warning::Mate '$MATE_NAME' edited files outside the review window — reverting:"
+      echo "$WINDOW_VIOLATIONS"
+      WINDOW_VIOLATION_COUNT=$(echo "$WINDOW_VIOLATIONS" | wc -l | tr -d ' ')
+      VIOLATIONS_FOUND=$((VIOLATIONS_FOUND + WINDOW_VIOLATION_COUNT))
+
+      while IFS= read -r file; do
+        if [ -n "$file" ]; then
+          if git ls-files --error-unmatch "$file" 2>/dev/null; then
+            git checkout -- "$file" 2>/dev/null || true
+          else
+            rm -f "$file" 2>/dev/null || true
+          fi
+          echo "  Reverted: $file (not in review window)"
+        fi
+      done <<< "$WINDOW_VIOLATIONS"
+    else
+      echo "All edits within review window."
     fi
   fi
 
