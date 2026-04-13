@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.7.2] - 2026-04-13
+
+### Fixed
+- fix: Harden workflows against script injection and scope mismatches
+
+### Changed
+- docs: Update CHANGELOG for v0.7.1 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.7.1...v0.7.2
+
 ## [0.7.1] - 2026-04-12
 
 ### Fixed
