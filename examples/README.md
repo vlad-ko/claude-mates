@@ -214,6 +214,7 @@ name: Security Aftermath
 on:
   pull_request_target:
     types: [closed]
+    branches: [main]   # scope-match your security-review.yml trigger
 
 permissions:
   issues: write
