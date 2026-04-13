@@ -32,26 +32,96 @@ fi
 
 # ─── Test scenario setup helpers ────────────────────────────────────────────
 
-# Initialize a bare git repo with a single initial commit, so git log has something.
+# Helper: compute a unix-timestamp string in git's epoch format for N
+# seconds ago. Avoids macOS/Linux `date -d` portability issues.
+ts_seconds_ago() {
+  local secs="$1"
+  local now
+  now=$(date +%s)
+  echo "@$((now - secs)) +0000"
+}
+
+# Initialize a git repo with a BACKDATED root commit (3 days ago).
+# The backdate is important: it gives the 24h-cap ancestor a commit to
+# anchor on in tests that should exercise the "pass" path. A fresh init
+# would leave no commits older than 24h, and the new bounded-window
+# rule would skip (correctly) every time.
 init_repo() {
   local dir="$1"
   git -C "$dir" init -q --initial-branch=main
   git -C "$dir" config user.email "test@local"
   git -C "$dir" config user.name "Test Harness"
-  git -C "$dir" commit -q --allow-empty -m "chore: initial commit"
+  local when
+  when=$(ts_seconds_ago $((3 * 86400)))
+  GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" \
+    git -C "$dir" commit -q --allow-empty -m "chore: initial commit (backdated >24h)"
 }
 
-# Append a commit to the repo with a given message.
+# Initialize a repo with NO backdated history — all commits will be fresh.
+# Used to test the "brand-new repo / no eligible window" skip path.
+init_fresh_repo() {
+  local dir="$1"
+  git -C "$dir" init -q --initial-branch=main
+  git -C "$dir" config user.email "test@local"
+  git -C "$dir" config user.name "Test Harness"
+  git -C "$dir" commit -q --allow-empty -m "chore: initial commit (fresh)"
+}
+
+# Append an empty commit (present-dated) with a given message.
+# Used for mate-authored / release-automation markers where file content
+# doesn't matter — only the commit message trips the self-loop guards.
 add_commit() {
   local dir="$1"
   local msg="$2"
   git -C "$dir" commit -q --allow-empty -m "$msg"
 }
 
+# Append a present-dated commit that modifies an in-scope file for the
+# docs mate (docs/guide.md). Creates the file if needed. Use this to
+# produce a non-empty REVIEW_SET so runner.sh reaches Phase 0 complete.
+add_in_scope_change() {
+  local dir="$1"
+  local msg="${2:-fix: human edit to docs/guide.md}"
+  mkdir -p "$dir/docs"
+  echo "content-$(date +%s%N)" >> "$dir/docs/guide.md"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "$msg"
+}
+
+# Append a present-dated commit that modifies an OUT-of-scope file for
+# the docs mate (app/Foo.php). Use to verify the runner skips when
+# nothing in-scope changed.
+add_out_of_scope_change() {
+  local dir="$1"
+  local msg="${2:-fix: human edit to app/Foo.php}"
+  mkdir -p "$dir/app"
+  echo "content-$(date +%s%N)" >> "$dir/app/Foo.php"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "$msg"
+}
+
+# Append a backdated in-scope commit. Default: 3 days ago. Pass an
+# explicit seconds-ago value as $3 if you need a different age.
+# Simulates "old unreviewed burst" — used to exercise cursor-fallback.
+add_backdated_in_scope_change() {
+  local dir="$1"
+  local msg="${2:-fix: docs tweak (backdated)}"
+  local secs_ago="${3:-$((3 * 86400))}"
+  mkdir -p "$dir/docs"
+  echo "backdated-$(date +%s%N)" >> "$dir/docs/guide.md"
+  git -C "$dir" add -A
+  local when
+  when=$(ts_seconds_ago "$secs_ago")
+  GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" \
+    git -C "$dir" commit -q -m "$msg"
+}
+
 # ─── Test runner ────────────────────────────────────────────────────────────
 
-# run_test <test-name> <event-name> <head-ref> <expected: skip|pass> <skip-reason-regex-or-empty> <setup-fn>
+# run_test <test-name> <event-name> <head-ref> <expected: skip|skip-delta|pass> <skip-reason-regex-or-empty> <setup-fn> [init-fn]
 # The setup function receives the tmpdir path and populates it with commits.
+# Optional init-fn lets a test pick init_fresh_repo (no backdated root)
+# instead of the default init_repo (3-day-old backdated root).
 run_test() {
   local name="$1"
   local event_name="$2"
@@ -59,11 +129,12 @@ run_test() {
   local expected="$4"
   local skip_reason_regex="$5"
   local setup_fn="$6"
+  local init_fn="${7:-init_repo}"
 
   TESTS_RUN=$((TESTS_RUN + 1))
   echo ""
   echo "━━━ Test $TESTS_RUN: $name"
-  echo "    event=$event_name head_ref=${head_ref:-<empty>} expected=$expected"
+  echo "    event=$event_name head_ref=${head_ref:-<empty>} expected=$expected init=$init_fn"
 
   local tmpdir
   tmpdir=$(mktemp -d -t runner-test-XXXXXX)
@@ -74,7 +145,7 @@ run_test() {
   : > "$step_summary_file"
 
   # Initialize repo and apply per-test commit history
-  init_repo "$tmpdir"
+  "$init_fn" "$tmpdir"
   "$setup_fn" "$tmpdir"
 
   # Run runner.sh in test mode (Phase 0 only)
@@ -111,9 +182,9 @@ run_test() {
       fi
       ;;
     skip-delta)
-      # Delta-scope fast-path fired → cursor exists, review set empty, no API call
-      if ! grep -q "Delta scope: nothing to review" "$stdout_file"; then
-        fail "$name" "expected delta-scope skip, but stdout has no 'Delta scope: nothing to review' banner" "$stdout_file" "$github_output_file"
+      # Delta-window fast-path fired → window resolved to empty, no API call
+      if ! grep -q "Delta window: nothing to review" "$stdout_file"; then
+        fail "$name" "expected delta-window skip, but stdout has no 'Delta window: nothing to review' banner" "$stdout_file" "$github_output_file"
       elif [ -n "$skip_reason_regex" ] && ! grep -qE "$skip_reason_regex" "$stdout_file"; then
         fail "$name" "delta-skip reason didn't match pattern '$skip_reason_regex'" "$stdout_file" "$github_output_file"
       elif ! grep -q "outcome=none" "$github_output_file"; then
@@ -164,46 +235,46 @@ fail() {
 
 setup_human_only() {
   local dir="$1"
-  add_commit "$dir" "feat: add a thing"
-  add_commit "$dir" "fix: correct a bug"
+  add_in_scope_change "$dir" "feat: add docs/guide.md"
+  add_in_scope_change "$dir" "fix: tweak docs/guide.md"
 }
 
 setup_mate_then_human() {
   local dir="$1"
-  add_commit "$dir" "feat: initial human work"
+  add_in_scope_change "$dir" "feat: initial docs"
   add_commit "$dir" "docs: docs mate findings [claude-mate:docs]"
-  add_commit "$dir" "fix: human commit AFTER the mate commit"
+  add_in_scope_change "$dir" "fix: human edit AFTER the mate commit"
 }
 
 setup_human_then_mate() {
   local dir="$1"
-  add_commit "$dir" "feat: initial human work"
+  add_in_scope_change "$dir" "feat: initial docs"
   add_commit "$dir" "docs: docs mate findings [claude-mate:docs]"
   # No human commit after the mate's — the guard should fire
 }
 
 setup_head_is_mate_bracketed() {
   local dir="$1"
-  add_commit "$dir" "feat: human work"
+  add_in_scope_change "$dir" "feat: initial docs"
   add_commit "$dir" "docs: cleanup [claude-mate:docs]"
 }
 
 setup_head_is_mate_merge() {
   local dir="$1"
-  add_commit "$dir" "feat: human work"
+  add_in_scope_change "$dir" "feat: initial docs"
   # Simulate a merge commit referencing a claude-mate/ branch
   add_commit "$dir" "Merge pull request #42 from vlad-ko/claude-mate/docs/2026-04-12"
 }
 
 setup_head_is_skip_release() {
   local dir="$1"
-  add_commit "$dir" "feat: human work"
+  add_in_scope_change "$dir" "feat: initial docs"
   add_commit "$dir" "docs: Update CHANGELOG for v0.6.1 [skip release]"
 }
 
 setup_head_is_changelog_docs() {
   local dir="$1"
-  add_commit "$dir" "feat: human work"
+  add_in_scope_change "$dir" "feat: initial docs"
   # This commit starts with 'docs: Update CHANGELOG for v' — defense-in-depth guard
   add_commit "$dir" "docs: Update CHANGELOG for v0.7.0"
 }
@@ -264,6 +335,65 @@ setup_delta_in_scope() {
   git -C "$dir" commit -q -m "fix: unrelated app change"
 }
 
+# Cursor exists but is OLD (> 24h). Recent burst of in-scope commits
+# happened BEFORE 24h, then repo went idle. The 24h cap primary window
+# is empty → fallback to cursor should fire → review the 2-day-old burst.
+#
+# Timeline (all before "now"):
+#   T-5d:  mate cursor (initial docs + mate finding [claude-mate:docs])
+#   T-2d:  in-scope burst (unreviewed since cursor, before 24h window)
+#   now:   HEAD = T-2d (nothing in last 24h)
+setup_cap_empty_cursor_has_work() {
+  local dir="$1"
+  # Backdated mate cursor (5 days ago)
+  local five_days
+  five_days=$(ts_seconds_ago $((5 * 86400)))
+  mkdir -p "$dir/docs"
+  echo "initial" > "$dir/docs/guide.md"
+  git -C "$dir" add -A
+  GIT_AUTHOR_DATE="$five_days" GIT_COMMITTER_DATE="$five_days" \
+    git -C "$dir" commit -q -m "docs: initial guide"
+  GIT_AUTHOR_DATE="$five_days" GIT_COMMITTER_DATE="$five_days" \
+    git -C "$dir" commit -q --allow-empty -m "docs: mate finding [claude-mate:docs]"
+
+  # Unreviewed burst 2 days ago — still OUTSIDE the 24h primary window
+  add_backdated_in_scope_change "$dir" "fix: docs tweak (2 days ago)" $((2 * 86400))
+}
+
+# Cursor exists, cursor is OLD, NO commits since cursor. Primary 24h
+# window empty, fallback cursor window ALSO empty → skip.
+#
+# Timeline:
+#   T-10d: mate cursor
+#   now:   HEAD = T-10d (nothing since)
+setup_cap_empty_cursor_empty() {
+  local dir="$1"
+  local ten_days
+  ten_days=$(ts_seconds_ago $((10 * 86400)))
+  mkdir -p "$dir/docs"
+  echo "initial" > "$dir/docs/guide.md"
+  git -C "$dir" add -A
+  GIT_AUTHOR_DATE="$ten_days" GIT_COMMITTER_DATE="$ten_days" \
+    git -C "$dir" commit -q -m "docs: initial guide"
+  GIT_AUTHOR_DATE="$ten_days" GIT_COMMITTER_DATE="$ten_days" \
+    git -C "$dir" commit -q --allow-empty -m "docs: mate finding [claude-mate:docs]"
+  # An empty present-dated commit on top of the cursor moves HEAD past
+  # the mate marker (so the self-loop guard doesn't preempt) without
+  # adding any file changes (so the delta-window skip path is exercised).
+  # cap = the 10-day-old commit older than 24h; cursor = mate finding;
+  # HEAD = this empty commit. Diff cap..HEAD = empty, fallback diff
+  # cursor..HEAD = empty → skip-delta.
+  add_commit "$dir" "chore: noop (HEAD past cursor, no file changes)"
+}
+
+# Brand-new repo: pairs with init_fresh_repo. No backdated history, no
+# cursor. All commits are within the 24h horizon → cap empty, no
+# fallback target → skip clean.
+setup_brand_new_repo() {
+  local dir="$1"
+  add_in_scope_change "$dir" "feat: first commit on a brand-new repo"
+}
+
 # ─── Test cases ─────────────────────────────────────────────────────────────
 
 echo "Running Phase 0 integration tests against $RUNNER"
@@ -273,11 +403,10 @@ echo ""
 run_test "schedule: no prior mate commit → pass" \
   "schedule" "" "pass" "" setup_human_only
 
-run_test "schedule: mate commit with newer empty human commit → skip-delta" \
-  "schedule" "" "skip-delta" "none within allowed_paths" setup_mate_then_human
-# Note: setup_mate_then_human uses --allow-empty commits. No files changed
-# since the cursor → REVIEW_SET empty → delta-scope skip-fast-path fires.
-# Under the old regime (before delta scope) this was a "pass" case.
+run_test "schedule: mate commit with newer in-scope human commit → pass" \
+  "schedule" "" "pass" "" setup_mate_then_human
+# Human commit after the cursor edits an in-scope file → REVIEW_SET
+# non-empty → run proceeds past delta check to Phase 0 complete.
 
 run_test "schedule: mate commit with NO newer human commit → skip" \
   "schedule" "" "skip" "mate-authored|No human-authored work" setup_human_then_mate
@@ -315,7 +444,7 @@ run_test "push of normal HEAD → pass" \
 
 # workflow_dispatch — bypasses self-loop guards, but still applies delta scope
 run_test "workflow_dispatch with mate-authored HEAD (no later changes) → skip-delta" \
-  "workflow_dispatch" "" "skip-delta" "none within allowed_paths" setup_head_is_mate_bracketed
+  "workflow_dispatch" "" "skip-delta" "none in this mate's allowed_paths" setup_head_is_mate_bracketed
 # Note: self-loop guard is bypassed on workflow_dispatch (manual intent),
 # but delta scope still fires — cursor exists, nothing changed since,
 # nothing to review. The skip is honest and costs zero API dollars.
@@ -323,13 +452,11 @@ run_test "workflow_dispatch with mate-authored HEAD (no later changes) → skip-
 run_test "workflow_dispatch from claude-mate/ branch → pass (manual bypass)" \
   "workflow_dispatch" "claude-mate/docs/2026-04-12" "pass" "" setup_human_only
 
-# ─── Delta-scope tests ──────────────────────────────────────────────────────
-# These cover the new "review only files changed since last run" contract.
-# Events that trigger a normal run (workflow_dispatch bypasses self-loop but
-# still applies delta scope).
+# ─── Bounded delta window tests ─────────────────────────────────────────────
+# Cover the "review only files changed since last run OR last 24h" contract.
 
 run_test "workflow_dispatch: cursor exists, only out-of-scope changes → skip-delta" \
-  "workflow_dispatch" "" "skip-delta" "none within allowed_paths" setup_delta_out_of_scope
+  "workflow_dispatch" "" "skip-delta" "none in this mate's allowed_paths" setup_delta_out_of_scope
 
 run_test "workflow_dispatch: cursor exists, in-scope changes → pass" \
   "workflow_dispatch" "" "pass" "" setup_delta_in_scope
@@ -337,9 +464,29 @@ run_test "workflow_dispatch: cursor exists, in-scope changes → pass" \
 run_test "schedule: cursor exists, in-scope changes → pass" \
   "schedule" "" "pass" "" setup_delta_in_scope
 
-# First-ever run (no cursor): delta scope falls through to bootstrap full scan
-run_test "schedule: no cursor → pass (bootstrap full scan)" \
+# No cursor: window falls back to the 24h cap (the backdated root from init_repo
+# is 3 days old, so it anchors the cap). Fresh in-scope commits fall in the
+# cap..HEAD window → REVIEW_SET non-empty → pass via 24h-fallback.
+run_test "schedule: no cursor + in-scope changes → pass (24h fallback)" \
   "schedule" "" "pass" "" setup_human_only
+
+# Brand-new repo: init_fresh_repo (NO backdated root) + commits all within
+# 24h. No cursor, no cap → WINDOW_START empty → skip clean. This is the
+# "brand-new or idle repo" skip path.
+run_test "schedule: brand-new repo (no old commits, no cursor) → skip-delta" \
+  "schedule" "" "skip-delta" "No eligible window work" setup_brand_new_repo init_fresh_repo
+
+# Cursor-fallback: cursor is older than 24h, NO commits in last 24h, but
+# there IS unreviewed work between cursor and HEAD (e.g., a 2-day-old
+# burst). Primary window (cap) is empty → fallback to cursor → pass.
+# This is the rule "if no commits in last 24h, fall back to last mate run."
+run_test "schedule: cap empty + cursor has unreviewed work → pass (cursor-fallback)" \
+  "schedule" "" "pass" "" setup_cap_empty_cursor_has_work
+
+# Skip case: cursor exists but BOTH windows are empty. Truly idle since
+# the last review. The fallback is computed but yields nothing → skip.
+run_test "schedule: cap empty + cursor empty (fully idle since last review) → skip-delta" \
+  "schedule" "" "skip-delta" "none in this mate's allowed_paths" setup_cap_empty_cursor_empty
 
 # ─── Summary ────────────────────────────────────────────────────────────────
 
