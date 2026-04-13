@@ -118,10 +118,15 @@ The action surfaces five outputs so downstream steps can branch on what the mate
 
       - name: Post to Slack when a PR lands
         if: steps.mate.outputs.outcome == 'pr'
-        run: |
-          curl -XPOST "$SLACK_WEBHOOK" -d "{\"text\":\"Mate opened ${{ steps.mate.outputs.pr-url }}\"}"
         env:
+          # Pass outputs via env:, NOT inline `${{ }}` in the run: body.
+          # `${{ }}` substitution happens before bash sees the command,
+          # so shell metacharacters in the value would execute. Env-var
+          # references are inert.
+          PR_URL: ${{ steps.mate.outputs.pr-url }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          curl -XPOST "$SLACK_WEBHOOK" -d "{\"text\":\"Mate opened $PR_URL\"}"
 ```
 
 ---
@@ -214,6 +219,7 @@ name: Security Aftermath
 on:
   pull_request_target:
     types: [closed]
+    branches: [main]   # scope-match your security-review.yml trigger
 
 permissions:
   issues: write

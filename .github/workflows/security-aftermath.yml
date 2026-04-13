@@ -27,6 +27,11 @@ name: Security Aftermath
 on:
   pull_request_target:
     types: [closed]
+    # Scope-match security.yml (which only runs on pull_request against
+    # main). Without this filter, PRs merged to non-main branches would
+    # trigger the aftermath, fail to find a Security scan, and emit a
+    # misleading "merged without review" warning.
+    branches: [main]
 
 permissions:
   issues: write

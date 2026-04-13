@@ -5,7 +5,7 @@ All notable changes to Claude Mates are documented here.
 ## [0.7.1] - 2026-04-12
 
 ### Fixed
-- fix: Log outcome step fails on empty outputs — same bug as webo PR #1507
+- fix: Log outcome step fails on empty outputs when mate runs cleanly
 
 ### Changed
 - docs: Update CHANGELOG for v0.7.0 [skip release]
