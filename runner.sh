@@ -215,11 +215,26 @@ print(json.dumps(tc))
 fi
 
 # ─── Helper: emit skip outputs and exit cleanly ─────────────────────────────
-# Used by all Phase 0 skip paths. Keeps output contract consistent.
+# Used by all Phase 0 self-loop paths. Keeps output contract consistent
+# with the bounded-window skip-fast-path below: structured banner, GitHub
+# Step Summary entry, contract outputs, exit 0.
 emit_skip_and_exit() {
   local reason="$1"
-  echo "=== Phase 0: Self-loop guard ==="
-  echo "$reason"
+  echo ""
+  echo "════════════════════════════════════════════════════════════════════════"
+  echo "  SKIP — Phase 0 self-loop guard fired"
+  echo "════════════════════════════════════════════════════════════════════════"
+  echo "  mate:           ${MATE_NAME}"
+  echo "  event:          ${GITHUB_EVENT_NAME:-unknown}"
+  echo ""
+  echo "  Reason:"
+  printf '  %s\n' "$reason" | fold -s -w 70 | sed '2,$s/^/  /'
+  echo ""
+  echo "  Action: exiting cleanly (outcome=none, status=clean). Zero API cost."
+  echo "          The framework prevents mates from reviewing their own output"
+  echo "          or release-automation commits."
+  echo "════════════════════════════════════════════════════════════════════════"
+
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
       echo "outcome=none"
@@ -230,9 +245,11 @@ emit_skip_and_exit() {
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-      echo "## ${MATE_NAME} — skipped"
+      echo "## ${MATE_NAME} — skipped (self-loop guard)"
       echo ""
-      echo "_${reason}_"
+      echo "${reason}"
+      echo ""
+      echo "_Outputs: \`outcome=none\`, \`status=clean\`. The framework prevents mates from reviewing their own output or release-automation commits._"
     } >> "$GITHUB_STEP_SUMMARY"
   fi
   exit 0
@@ -441,21 +458,52 @@ if [ -n "$LAST_MATE_COMMIT" ]; then
 fi
 echo "Delta window: start=${WINDOW_SHORT} (source=${WINDOW_SOURCE:-none}), cursor=${CURSOR_SHORT}, max_window=${MAX_WINDOW_HOURS}h, changed=${CHANGED_FILES_COUNT} files, review_set=${REVIEW_SET_COUNT} in-scope"
 
-# Skip-fast-path: no work in this mate's window.
-# Three ways to land here — all produce the same zero-API-cost skip:
-#   a. WINDOW_START empty (no cursor AND no commits older than horizon)
-#   b. WINDOW_START set but CHANGED_FILES empty (HEAD == WINDOW_START)
-#   c. WINDOW_START set, files changed, none intersect allowed_paths
+# Skip-fast-path: no work in this mate's window. Three distinct kinds, each
+# gets a kind-specific reason so an operator reading the CI log a week later
+# can tell at a glance whether action is needed (almost always: no).
+#
+#   no_window      — cursor missing AND no commits older than horizon
+#                    (typical for brand-new repos under the window age)
+#   window_empty   — window resolved, but no commits between window start
+#                    and HEAD (idle or fully reviewed since cursor)
+#   none_in_scope  — commits exist in window, but none match allowed_paths
+#                    (activity is in other parts of the repo)
 if [ "$REVIEW_SET_COUNT" -eq 0 ]; then
-  echo ""
-  echo "=== Delta window: nothing to review ==="
-  if [ -z "$WINDOW_START" ]; then
-    SKIP_REASON="No eligible window work (no cursor AND no commits older than ${MAX_WINDOW_HOURS}h) — brand-new or idle repo."
-  else
-    SKIP_REASON="${CHANGED_FILES_COUNT} file(s) changed in window since \`${WINDOW_SHORT}\` (${WINDOW_SOURCE}), none in this mate's allowed_paths."
+  CAP_SHORT="<none — repo younger than ${MAX_WINDOW_HOURS}h>"
+  if [ -n "$WINDOW_CAP_SHA" ]; then
+    CAP_SHORT="${WINDOW_CAP_SHA:0:7}"
   fi
-  echo "$SKIP_REASON"
-  echo "Skipping Claude invocation — no drift possible in this mate's scope."
+
+  if [ -z "$WINDOW_START" ]; then
+    SKIP_KIND="no_window"
+    SKIP_REASON="No window could be established. The repo has no commits older than ${MAX_WINDOW_HOURS}h AND no prior mate run exists. This is typical for brand-new repos. The next scheduled run will pick up new activity once commits accumulate."
+  elif [ "$CHANGED_FILES_COUNT" -eq 0 ]; then
+    SKIP_KIND="window_empty"
+    SKIP_REASON="Window resolved to \`${WINDOW_SHORT}\` (${WINDOW_SOURCE}) but no files changed between there and HEAD. Either the repo has been idle since this point, or a previous mate run already reviewed everything. Nothing for this mate to do."
+  else
+    SKIP_KIND="none_in_scope"
+    ALLOWED_DISPLAY=$(echo "$ALLOWED_PATHS" | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+    SKIP_REASON="${CHANGED_FILES_COUNT} file(s) changed in window since \`${WINDOW_SHORT}\` (${WINDOW_SOURCE}), but NONE match this mate's allowed_paths (\`${ALLOWED_DISPLAY}\`). The activity is real, just outside this mate's domain."
+  fi
+
+  echo ""
+  echo "════════════════════════════════════════════════════════════════════════"
+  echo "  SKIP — bounded delta window has nothing to review (kind: ${SKIP_KIND})"
+  echo "════════════════════════════════════════════════════════════════════════"
+  echo "  mate:           ${MATE_NAME}"
+  echo "  max_window:     ${MAX_WINDOW_HOURS}h"
+  echo "  cursor:         ${CURSOR_SHORT}"
+  echo "  ${MAX_WINDOW_HOURS}h cap:        ${CAP_SHORT}"
+  echo "  window:         ${WINDOW_SHORT} (source: ${WINDOW_SOURCE:-none})"
+  echo "  in window:      ${CHANGED_FILES_COUNT} files changed"
+  echo "  in mate scope:  ${REVIEW_SET_COUNT} files"
+  echo ""
+  echo "  Reason:"
+  printf '  %s\n' "$SKIP_REASON" | fold -s -w 70 | sed '2,$s/^/  /'
+  echo ""
+  echo "  Action: exiting cleanly (outcome=none, status=clean). Zero API cost."
+  echo "          Next scheduled run will reassess against latest HEAD."
+  echo "════════════════════════════════════════════════════════════════════════"
 
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
@@ -467,9 +515,22 @@ if [ "$REVIEW_SET_COUNT" -eq 0 ]; then
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-      echo "## ${MATE_NAME} — no drift to review"
+      echo "## ${MATE_NAME} — skipped (no drift to review)"
+      echo ""
+      echo "**Skip kind:** \`${SKIP_KIND}\`"
       echo ""
       echo "${SKIP_REASON}"
+      echo ""
+      echo "| | |"
+      echo "|---|---|"
+      echo "| max_window | ${MAX_WINDOW_HOURS}h |"
+      echo "| cursor | \`${CURSOR_SHORT}\` |"
+      echo "| ${MAX_WINDOW_HOURS}h cap | \`${CAP_SHORT}\` |"
+      echo "| window start | \`${WINDOW_SHORT}\` (${WINDOW_SOURCE:-none}) |"
+      echo "| files in window | ${CHANGED_FILES_COUNT} |"
+      echo "| files in mate scope | ${REVIEW_SET_COUNT} |"
+      echo ""
+      echo "_Outputs: \`outcome=none\`, \`status=clean\`. Next scheduled run will reassess._"
     } >> "$GITHUB_STEP_SUMMARY"
   fi
   exit 0

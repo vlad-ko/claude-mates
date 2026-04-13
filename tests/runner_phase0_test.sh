@@ -170,9 +170,9 @@ run_test() {
 
   case "$expected" in
     skip)
-      # Guard fired → skip message in stdout, outcome=none in $GITHUB_OUTPUT
-      if ! grep -q "Self-loop guard" "$stdout_file"; then
-        fail "$name" "expected guard to fire, but stdout has no 'Self-loop guard' message" "$stdout_file" "$github_output_file"
+      # Self-loop guard fired → banner in stdout, outcome=none in $GITHUB_OUTPUT
+      if ! grep -qi "self-loop guard" "$stdout_file"; then
+        fail "$name" "expected self-loop guard to fire, but stdout has no 'self-loop guard' banner" "$stdout_file" "$github_output_file"
       elif [ -n "$skip_reason_regex" ] && ! grep -qE "$skip_reason_regex" "$stdout_file"; then
         fail "$name" "skip reason didn't match pattern '$skip_reason_regex'" "$stdout_file" "$github_output_file"
       elif ! grep -q "outcome=none" "$github_output_file"; then
@@ -183,8 +183,8 @@ run_test() {
       ;;
     skip-delta)
       # Delta-window fast-path fired → window resolved to empty, no API call
-      if ! grep -q "Delta window: nothing to review" "$stdout_file"; then
-        fail "$name" "expected delta-window skip, but stdout has no 'Delta window: nothing to review' banner" "$stdout_file" "$github_output_file"
+      if ! grep -q "bounded delta window has nothing to review" "$stdout_file"; then
+        fail "$name" "expected delta-window skip, but stdout has no 'bounded delta window has nothing to review' banner" "$stdout_file" "$github_output_file"
       elif [ -n "$skip_reason_regex" ] && ! grep -qE "$skip_reason_regex" "$stdout_file"; then
         fail "$name" "delta-skip reason didn't match pattern '$skip_reason_regex'" "$stdout_file" "$github_output_file"
       elif ! grep -q "outcome=none" "$github_output_file"; then
@@ -197,7 +197,7 @@ run_test() {
       ;;
     pass)
       # Guard did NOT fire → reached the end-of-Phase-0 marker
-      if grep -q "Self-loop guard" "$stdout_file" && grep -q "skipping" "$stdout_file"; then
+      if grep -qi "self-loop guard" "$stdout_file" && grep -q "exiting cleanly" "$stdout_file"; then
         fail "$name" "expected guard to pass, but stdout shows a skip" "$stdout_file" "$github_output_file"
       elif ! grep -q "Phase 0 complete — exiting in MATE_TEST_MODE=phase0-only" "$stdout_file"; then
         fail "$name" "didn't reach Phase-0-complete marker" "$stdout_file" "$github_output_file"
@@ -443,8 +443,8 @@ run_test "push of normal HEAD → pass" \
   "push" "" "pass" "" setup_human_only
 
 # workflow_dispatch — bypasses self-loop guards, but still applies delta scope
-run_test "workflow_dispatch with mate-authored HEAD (no later changes) → skip-delta" \
-  "workflow_dispatch" "" "skip-delta" "none in this mate's allowed_paths" setup_head_is_mate_bracketed
+run_test "workflow_dispatch with mate-authored HEAD (no later changes) → skip-delta (window_empty)" \
+  "workflow_dispatch" "" "skip-delta" "kind: window_empty" setup_head_is_mate_bracketed
 # Note: self-loop guard is bypassed on workflow_dispatch (manual intent),
 # but delta scope still fires — cursor exists, nothing changed since,
 # nothing to review. The skip is honest and costs zero API dollars.
@@ -455,8 +455,8 @@ run_test "workflow_dispatch from claude-mate/ branch → pass (manual bypass)" \
 # ─── Bounded delta window tests ─────────────────────────────────────────────
 # Cover the "review only files changed since last run OR last 24h" contract.
 
-run_test "workflow_dispatch: cursor exists, only out-of-scope changes → skip-delta" \
-  "workflow_dispatch" "" "skip-delta" "none in this mate's allowed_paths" setup_delta_out_of_scope
+run_test "workflow_dispatch: cursor exists, only out-of-scope changes → skip-delta (none_in_scope)" \
+  "workflow_dispatch" "" "skip-delta" "kind: none_in_scope" setup_delta_out_of_scope
 
 run_test "workflow_dispatch: cursor exists, in-scope changes → pass" \
   "workflow_dispatch" "" "pass" "" setup_delta_in_scope
@@ -473,8 +473,8 @@ run_test "schedule: no cursor + in-scope changes → pass (24h fallback)" \
 # Brand-new repo: init_fresh_repo (NO backdated root) + commits all within
 # 24h. No cursor, no cap → WINDOW_START empty → skip clean. This is the
 # "brand-new or idle repo" skip path.
-run_test "schedule: brand-new repo (no old commits, no cursor) → skip-delta" \
-  "schedule" "" "skip-delta" "No eligible window work" setup_brand_new_repo init_fresh_repo
+run_test "schedule: brand-new repo (no old commits, no cursor) → skip-delta (no_window)" \
+  "schedule" "" "skip-delta" "kind: no_window" setup_brand_new_repo init_fresh_repo
 
 # Cursor-fallback: cursor is older than 24h, NO commits in last 24h, but
 # there IS unreviewed work between cursor and HEAD (e.g., a 2-day-old
@@ -485,8 +485,8 @@ run_test "schedule: cap empty + cursor has unreviewed work → pass (cursor-fall
 
 # Skip case: cursor exists but BOTH windows are empty. Truly idle since
 # the last review. The fallback is computed but yields nothing → skip.
-run_test "schedule: cap empty + cursor empty (fully idle since last review) → skip-delta" \
-  "schedule" "" "skip-delta" "none in this mate's allowed_paths" setup_cap_empty_cursor_empty
+run_test "schedule: cap empty + cursor empty (fully idle since last review) → skip-delta (window_empty)" \
+  "schedule" "" "skip-delta" "kind: window_empty" setup_cap_empty_cursor_empty
 
 # ─── Summary ────────────────────────────────────────────────────────────────
 
