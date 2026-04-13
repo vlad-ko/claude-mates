@@ -110,6 +110,20 @@ run_test() {
         pass "$name"
       fi
       ;;
+    skip-delta)
+      # Delta-scope fast-path fired → cursor exists, review set empty, no API call
+      if ! grep -q "Delta scope: nothing to review" "$stdout_file"; then
+        fail "$name" "expected delta-scope skip, but stdout has no 'Delta scope: nothing to review' banner" "$stdout_file" "$github_output_file"
+      elif [ -n "$skip_reason_regex" ] && ! grep -qE "$skip_reason_regex" "$stdout_file"; then
+        fail "$name" "delta-skip reason didn't match pattern '$skip_reason_regex'" "$stdout_file" "$github_output_file"
+      elif ! grep -q "outcome=none" "$github_output_file"; then
+        fail "$name" "GITHUB_OUTPUT missing outcome=none" "$stdout_file" "$github_output_file"
+      elif ! grep -q "status=clean" "$github_output_file"; then
+        fail "$name" "GITHUB_OUTPUT missing status=clean" "$stdout_file" "$github_output_file"
+      else
+        pass "$name"
+      fi
+      ;;
     pass)
       # Guard did NOT fire → reached the end-of-Phase-0 marker
       if grep -q "Self-loop guard" "$stdout_file" && grep -q "skipping" "$stdout_file"; then
@@ -194,6 +208,62 @@ setup_head_is_changelog_docs() {
   add_commit "$dir" "docs: Update CHANGELOG for v0.7.0"
 }
 
+# ─── Delta-scope setups (touch actual files in/out of docs mate scope) ──────
+# docs mate's allowed_paths: docs/**, CLAUDE.md, README.md, *.md
+
+# Mate contribution + later human commits that touch ONLY out-of-scope files.
+# Delta scope should skip: nothing in docs mate's scope changed since cursor.
+setup_delta_out_of_scope() {
+  local dir="$1"
+  # Initial state: an in-scope file exists but won't be touched after the cursor
+  mkdir -p "$dir/docs" "$dir/app"
+  echo "initial docs" > "$dir/docs/guide.md"
+  echo "initial code" > "$dir/app/Foo.php"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "feat: initial state"
+
+  # Mate contribution — sets the cursor
+  echo "mate touched" > "$dir/docs/guide.md"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "docs: mate finding [claude-mate:docs]"
+
+  # Human commits AFTER cursor, but only outside docs mate's scope
+  echo "updated code" > "$dir/app/Foo.php"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "fix: update app (out of docs scope)"
+
+  echo "more code" >> "$dir/app/Foo.php"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "fix: more code changes (still out of docs scope)"
+}
+
+# Mate contribution + later human commits that touch IN-scope files.
+# Delta scope should pass through — review set is non-empty.
+setup_delta_in_scope() {
+  local dir="$1"
+  mkdir -p "$dir/docs"
+  echo "initial" > "$dir/docs/guide.md"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "docs: add initial guide"
+
+  # Mate contribution — sets the cursor
+  echo "mate edit" > "$dir/docs/guide.md"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "docs: mate finding [claude-mate:docs]"
+
+  # Human commit AFTER cursor, IN scope
+  echo "human edit" > "$dir/docs/guide.md"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "fix: human updates docs/guide.md"
+
+  # Another out-of-scope change, but review_set is still non-empty because
+  # of the docs/guide.md change above. Delta scope should still proceed.
+  mkdir -p "$dir/app"
+  echo "unrelated" > "$dir/app/Bar.php"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "fix: unrelated app change"
+}
+
 # ─── Test cases ─────────────────────────────────────────────────────────────
 
 echo "Running Phase 0 integration tests against $RUNNER"
@@ -203,8 +273,11 @@ echo ""
 run_test "schedule: no prior mate commit → pass" \
   "schedule" "" "pass" "" setup_human_only
 
-run_test "schedule: mate commit with newer human commit → pass" \
-  "schedule" "" "pass" "" setup_mate_then_human
+run_test "schedule: mate commit with newer empty human commit → skip-delta" \
+  "schedule" "" "skip-delta" "none within allowed_paths" setup_mate_then_human
+# Note: setup_mate_then_human uses --allow-empty commits. No files changed
+# since the cursor → REVIEW_SET empty → delta-scope skip-fast-path fires.
+# Under the old regime (before delta scope) this was a "pass" case.
 
 run_test "schedule: mate commit with NO newer human commit → skip" \
   "schedule" "" "skip" "mate-authored|No human-authored work" setup_human_then_mate
@@ -240,12 +313,33 @@ run_test "push of [claude-mate HEAD → skip" \
 run_test "push of normal HEAD → pass" \
   "push" "" "pass" "" setup_human_only
 
-# workflow_dispatch — always runs, bypasses guards
-run_test "workflow_dispatch with mate-authored HEAD → pass (manual bypass)" \
-  "workflow_dispatch" "" "pass" "" setup_head_is_mate_bracketed
+# workflow_dispatch — bypasses self-loop guards, but still applies delta scope
+run_test "workflow_dispatch with mate-authored HEAD (no later changes) → skip-delta" \
+  "workflow_dispatch" "" "skip-delta" "none within allowed_paths" setup_head_is_mate_bracketed
+# Note: self-loop guard is bypassed on workflow_dispatch (manual intent),
+# but delta scope still fires — cursor exists, nothing changed since,
+# nothing to review. The skip is honest and costs zero API dollars.
 
 run_test "workflow_dispatch from claude-mate/ branch → pass (manual bypass)" \
   "workflow_dispatch" "claude-mate/docs/2026-04-12" "pass" "" setup_human_only
+
+# ─── Delta-scope tests ──────────────────────────────────────────────────────
+# These cover the new "review only files changed since last run" contract.
+# Events that trigger a normal run (workflow_dispatch bypasses self-loop but
+# still applies delta scope).
+
+run_test "workflow_dispatch: cursor exists, only out-of-scope changes → skip-delta" \
+  "workflow_dispatch" "" "skip-delta" "none within allowed_paths" setup_delta_out_of_scope
+
+run_test "workflow_dispatch: cursor exists, in-scope changes → pass" \
+  "workflow_dispatch" "" "pass" "" setup_delta_in_scope
+
+run_test "schedule: cursor exists, in-scope changes → pass" \
+  "schedule" "" "pass" "" setup_delta_in_scope
+
+# First-ever run (no cursor): delta scope falls through to bootstrap full scan
+run_test "schedule: no cursor → pass (bootstrap full scan)" \
+  "schedule" "" "pass" "" setup_human_only
 
 # ─── Summary ────────────────────────────────────────────────────────────────
 
