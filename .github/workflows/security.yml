@@ -53,7 +53,19 @@ jobs:
 
       - name: Log outcome
         if: always()
+        # Pass action outputs via env: rather than direct `${{ }}`
+        # interpolation in the run: block. `${{ }}` substitution happens
+        # BEFORE bash sees the command, so any shell metacharacters in the
+        # value would be executed. Env-var references (`$VAR`) are inert.
+        # The security workflow runs on `pull_request` from external
+        # contributors, so this surface matters — any future bug in the
+        # composite action that leaked PR content into outputs would
+        # become exploitable without this fix.
+        env:
+          OUTCOME: ${{ steps.mate.outputs.outcome }}
+          STATUS: ${{ steps.mate.outputs.status }}
+          FINDINGS: ${{ steps.mate.outputs.findings-count || 0 }}
         run: |
-          echo "Outcome:  ${{ steps.mate.outputs.outcome }}"
-          echo "Status:   ${{ steps.mate.outputs.status }}"
-          echo "Findings: ${{ steps.mate.outputs.findings-count || 0 }}"
+          echo "Outcome:  $OUTCOME"
+          echo "Status:   $STATUS"
+          echo "Findings: $FINDINGS"
