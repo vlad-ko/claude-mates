@@ -108,7 +108,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 100 }
-      - uses: vlad-ko/claude-mates@v0.6.1
+      - uses: vlad-ko/claude-mates@v0.9.0
         with:
           mate: ${{ matrix.mate }}
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -140,7 +140,7 @@ Escape hatch: repo admins can override the required check on a per-PR basis when
 ## Action reference
 
 ```yaml
-- uses: vlad-ko/claude-mates@v0.6.1
+- uses: vlad-ko/claude-mates@v0.9.0
   with:
     mate: docs                   # required: one of docs, tests, dead-code, logic, security
     api-key: ${{ ... }}          # required: Anthropic API key

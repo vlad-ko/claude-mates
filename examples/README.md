@@ -10,6 +10,30 @@ See the repo root [README.md](../README.md) for the `.claude-mates.yml` config s
 2. **Repo setting**: Settings → Actions → General → Workflow permissions → enable *"Allow GitHub Actions to create and approve pull requests"*.
 3. **Config file**: `.claude-mates.yml` in your repo root (enable/disable mates, override models, set scopes, deny rules).
 
+## How mates review work (v0.9.0+) — bounded delta window
+
+Each mate reviews a **bounded delta**, never the whole repo. For every run the framework computes:
+
+- **Window start** = whichever is more recent of (a) the last commit this mate authored, or (b) `now - max_window_hours` (default 24h).
+- **Fallback**: if the 24h window is empty AND a cursor exists, extend to cursor — catches unreviewed work that predates the horizon (e.g. a 3-day-old burst with nothing since).
+- **Review set** = files changed in that window ∩ mate's `allowed_paths`.
+
+If the review set is empty, the run **skips cleanly** (zero API cost). Skips surface with a structured banner tagged by **kind** so you can tell at a glance what happened:
+
+| kind | Meaning | Operator action |
+|---|---|---|
+| `no_window` | No cursor AND no commits older than the horizon (brand-new repo) | Wait until commits accumulate; next run will pick up |
+| `window_empty` | Window resolved but zero commits since → HEAD | Repo idle or fully reviewed; nothing to do |
+| `none_in_scope` | Commits exist in window, none match `allowed_paths` | Activity real, outside this mate's domain |
+
+Override the default with `max_window_hours` in `.claude-mates.yml` (no upper bound):
+
+```yaml
+mates:
+  docs:
+    max_window_hours: 168   # review the last week (e.g. catching up after an outage)
+```
+
 ---
 
 ## Pattern 1 — one mate, one workflow (recommended for fine-grained control)
@@ -44,7 +68,7 @@ jobs:
           # to find the last human-authored commit. 100 is a safe default.
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.6.1
+      - uses: vlad-ko/claude-mates@v0.9.0
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -87,7 +111,7 @@ jobs:
         with:
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.6.1
+      - uses: vlad-ko/claude-mates@v0.9.0
         with:
           mate: ${{ matrix.mate }}
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -111,7 +135,7 @@ The action surfaces five outputs so downstream steps can branch on what the mate
 
 ```yaml
       - id: mate
-        uses: vlad-ko/claude-mates@v0.6.1
+        uses: vlad-ko/claude-mates@v0.9.0
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -159,7 +183,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
-      - uses: vlad-ko/claude-mates@v0.6.1
+      - uses: vlad-ko/claude-mates@v0.9.0
         with:
           mate: security
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -317,7 +341,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 100
-      - uses: vlad-ko/claude-mates@v0.6.1   # or later
+      - uses: vlad-ko/claude-mates@v0.9.0   # or later
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
