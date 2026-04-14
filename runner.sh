@@ -1129,10 +1129,17 @@ for f in sorted(changed - review):
     # `set -e` with zero diagnostic output — the bug this block replaces.
     if [ -z "${PR_PATH_ABORTED:-}" ]; then
       git add -A
+      # The `|| echo ""` on the Fixes-line substitution is NOT cosmetic —
+      # without it, `[ -n "$EXISTING_ISSUE" ]` on an empty variable (the
+      # common case when no human-filed issue exists) exits 1, `&&` short-
+      # circuits, `$(...)` returns non-zero, the assignment propagates that
+      # exit, and `set -e` kills the script silently with zero diagnostic
+      # output. See #90. Sibling substitutions in PR_BODY and the Step
+      # Summary heredoc already use this safe pattern; this one didn't.
       COMMIT_MSG="${COMMIT_PREFIX}: ${MATE_DESC} findings [${LABEL_PREFIX}:${MATE_NAME}]
 
 Automated fixes by Claude Mates ${MATE_NAME} reviewer.
-$([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}")"
+$([ -n "$EXISTING_ISSUE" ] && echo "Fixes #${EXISTING_ISSUE}" || echo "")"
 
       if ! git commit -m "$COMMIT_MSG" 2>/tmp/mate-commit-error.txt; then
         echo "::error::git commit failed: $(cat /tmp/mate-commit-error.txt 2>/dev/null || echo 'unknown')"
@@ -1298,9 +1305,9 @@ if [ -n "$GITHUB_STEP_SUMMARY" ]; then
 | **Tokens** | ${TOKENS_IN} in / ${TOKENS_OUT} out |
 | **Result** | ${OUTCOME} |
 | **Violations reverted** | ${VIOLATIONS_FOUND} |
-$([ -n "$ISSUE_NUM" ] && echo "| **Issue** | #${ISSUE_NUM} |")
-$([ -n "$PR_NUM" ] && echo "| **PR** | #${PR_NUM} |")
-$([ "$FILES_CHANGED_COUNT" -gt 0 ] 2>/dev/null && echo "| **Files changed** | ${FILES_CHANGED_COUNT} |")
+$([ -n "$ISSUE_NUM" ] && echo "| **Issue** | #${ISSUE_NUM} |" || echo "")
+$([ -n "$PR_NUM" ] && echo "| **PR** | #${PR_NUM} |" || echo "")
+$([ "$FILES_CHANGED_COUNT" -gt 0 ] 2>/dev/null && echo "| **Files changed** | ${FILES_CHANGED_COUNT} |" || echo "")
 MDEOF
 fi
 
