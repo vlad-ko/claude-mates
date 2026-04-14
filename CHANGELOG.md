@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.9.2] - 2026-04-14
+
+### Fixed
+- fix: Add || echo fallback to \$(...) in assignments (closes #90)
+
+### Changed
+- docs: Update CHANGELOG for v0.9.1 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.9.1...v0.9.2
+
 ## [0.9.1] - 2026-04-14
 
 ### Fixed
