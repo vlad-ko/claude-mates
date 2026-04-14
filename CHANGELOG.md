@@ -2,6 +2,17 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.9.1] - 2026-04-14
+
+### Fixed
+- fix: Surface git commit and push errors (closes #87)
+
+### Changed
+- docs: Refresh examples to v0.9.0 and document bounded delta window
+- docs: Update CHANGELOG for v0.9.0 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.9.0...v0.9.1
+
 ## [0.9.0] - 2026-04-13
 
 ### Added
