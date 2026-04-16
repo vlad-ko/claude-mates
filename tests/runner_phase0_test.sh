@@ -170,9 +170,11 @@ run_test() {
 
   case "$expected" in
     skip)
-      # Self-loop guard fired → banner in stdout, outcome=none in $GITHUB_OUTPUT
-      if ! grep -qi "self-loop guard" "$stdout_file"; then
-        fail "$name" "expected self-loop guard to fire, but stdout has no 'self-loop guard' banner" "$stdout_file" "$github_output_file"
+      # Phase 0 skip fired → SKIP banner in stdout, outcome=none in $GITHUB_OUTPUT.
+      # Banner title varies by kind (self_loop / release_automation / no_human_work)
+      # so we match on the common "SKIP —" prefix rather than a specific title.
+      if ! grep -q "SKIP —" "$stdout_file"; then
+        fail "$name" "expected a SKIP banner, but stdout has no 'SKIP —' marker" "$stdout_file" "$github_output_file"
       elif [ -n "$skip_reason_regex" ] && ! grep -qE "$skip_reason_regex" "$stdout_file"; then
         fail "$name" "skip reason didn't match pattern '$skip_reason_regex'" "$stdout_file" "$github_output_file"
       elif ! grep -q "outcome=none" "$github_output_file"; then
@@ -197,8 +199,8 @@ run_test() {
       ;;
     pass)
       # Guard did NOT fire → reached the end-of-Phase-0 marker
-      if grep -qi "self-loop guard" "$stdout_file" && grep -q "exiting cleanly" "$stdout_file"; then
-        fail "$name" "expected guard to pass, but stdout shows a skip" "$stdout_file" "$github_output_file"
+      if grep -q "SKIP —" "$stdout_file" && grep -q "exiting cleanly" "$stdout_file"; then
+        fail "$name" "expected guard to pass, but stdout shows a SKIP banner" "$stdout_file" "$github_output_file"
       elif ! grep -q "Phase 0 complete — exiting in MATE_TEST_MODE=phase0-only" "$stdout_file"; then
         fail "$name" "didn't reach Phase-0-complete marker" "$stdout_file" "$github_output_file"
       else
@@ -277,6 +279,28 @@ setup_head_is_changelog_docs() {
   add_in_scope_change "$dir" "feat: initial docs"
   # This commit starts with 'docs: Update CHANGELOG for v' — defense-in-depth guard
   add_commit "$dir" "docs: Update CHANGELOG for v0.7.0"
+}
+
+# Schedule + HEAD=[skip release] + human commit below.
+# The delta guard should look past the bot HEAD and find the human work.
+setup_schedule_skip_release_with_human_below() {
+  local dir="$1"
+  add_in_scope_change "$dir" "feat: human added docs/guide.md"
+  add_commit "$dir" "docs: Update CHANGELOG for v1.4.1 [skip release]"
+}
+
+# Schedule + HEAD=CHANGELOG (no [skip release]) + human commit below.
+setup_schedule_changelog_with_human_below() {
+  local dir="$1"
+  add_in_scope_change "$dir" "feat: human added docs/guide.md"
+  add_commit "$dir" "docs: Update CHANGELOG for v1.4.0"
+}
+
+# Schedule + HEAD=[skip release] + NO human commits (only backdated root + bot).
+# Delta guard should find nothing to review and skip cleanly.
+setup_schedule_skip_release_no_human() {
+  local dir="$1"
+  add_commit "$dir" "docs: Update CHANGELOG for v1.0.0 [skip release]"
 }
 
 # ─── Delta-scope setups (touch actual files in/out of docs mate scope) ──────
@@ -487,6 +511,27 @@ run_test "schedule: cap empty + cursor has unreviewed work → pass (cursor-fall
 # the last review. The fallback is computed but yields nothing → skip.
 run_test "schedule: cap empty + cursor empty (fully idle since last review) → skip-delta (window_empty)" \
   "schedule" "" "skip-delta" "kind: window_empty" setup_cap_empty_cursor_empty
+
+# ─── Schedule + release-automation HEAD (regression tests for #93) ──────────
+# Direct-push CHANGELOG flow leaves a bot commit as HEAD on main. The Phase 0
+# HEAD check used to bail immediately; now on schedule events it falls through
+# to the delta guard which looks past bot commits for human work.
+
+run_test "schedule: HEAD=[skip release] + human commit below → pass (delta guard finds human work)" \
+  "schedule" "" "pass" "" setup_schedule_skip_release_with_human_below
+
+run_test "schedule: HEAD=CHANGELOG + human commit below → pass (delta guard finds human work)" \
+  "schedule" "" "pass" "" setup_schedule_changelog_with_human_below
+
+run_test "schedule: HEAD=[skip release] + no human commit → skip-delta (delta guard catches it)" \
+  "schedule" "" "skip-delta" "" setup_schedule_skip_release_no_human
+
+# Verify PR events STILL bail on release-automation HEAD (unchanged behavior)
+run_test "pull_request: HEAD=[skip release] → skip (unchanged)" \
+  "pull_request" "" "skip" "skip release" setup_head_is_skip_release
+
+run_test "pull_request: HEAD=CHANGELOG → skip (unchanged)" \
+  "pull_request" "" "skip" "auto-generated CHANGELOG" setup_head_is_changelog_docs
 
 # ─── Summary ────────────────────────────────────────────────────────────────
 
