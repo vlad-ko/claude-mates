@@ -215,24 +215,47 @@ print(json.dumps(tc))
 fi
 
 # ─── Helper: emit skip outputs and exit cleanly ─────────────────────────────
-# Used by all Phase 0 self-loop paths. Keeps output contract consistent
+# Used by all Phase 0 skip paths. Keeps output contract consistent
 # with the bounded-window skip-fast-path below: structured banner, GitHub
 # Step Summary entry, contract outputs, exit 0.
+#
+# $1 = kind: one of self_loop | release_automation | no_human_work
+#      Controls the banner title so operators can distinguish "safety
+#      guard fired" from "nothing to review" at a glance in CI logs.
+# $2 = reason: human-readable explanation (freeform text)
 emit_skip_and_exit() {
-  local reason="$1"
+  local kind="$1"
+  local reason="$2"
+
+  local banner_title
+  local summary_label
+  case "$kind" in
+    self_loop)
+      banner_title="SKIP — Self-loop prevention (mate reviewing own output)"
+      summary_label="skipped (self-loop)" ;;
+    release_automation)
+      banner_title="SKIP — Nothing to analyze (release-automation commit)"
+      summary_label="skipped (release automation)" ;;
+    no_human_work)
+      banner_title="SKIP — No unreviewed human work since last mate run"
+      summary_label="skipped (no new human work)" ;;
+    *)
+      banner_title="SKIP — Phase 0 guard fired"
+      summary_label="skipped" ;;
+  esac
+
   echo ""
   echo "════════════════════════════════════════════════════════════════════════"
-  echo "  SKIP — Phase 0 self-loop guard fired"
+  echo "  ${banner_title}"
   echo "════════════════════════════════════════════════════════════════════════"
   echo "  mate:           ${MATE_NAME}"
   echo "  event:          ${GITHUB_EVENT_NAME:-unknown}"
+  echo "  kind:           ${kind}"
   echo ""
   echo "  Reason:"
   printf '  %s\n' "$reason" | fold -s -w 70 | sed '2,$s/^/  /'
   echo ""
   echo "  Action: exiting cleanly (outcome=none, status=clean). Zero API cost."
-  echo "          The framework prevents mates from reviewing their own output"
-  echo "          or release-automation commits."
   echo "════════════════════════════════════════════════════════════════════════"
 
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
@@ -245,11 +268,11 @@ emit_skip_and_exit() {
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-      echo "## ${MATE_NAME} — skipped (self-loop guard)"
+      echo "## ${MATE_NAME} — ${summary_label}"
       echo ""
       echo "${reason}"
       echo ""
-      echo "_Outputs: \`outcome=none\`, \`status=clean\`. The framework prevents mates from reviewing their own output or release-automation commits._"
+      echo "_Outputs: \`outcome=none\`, \`status=clean\`._"
     } >> "$GITHUB_STEP_SUMMARY"
   fi
   exit 0
@@ -271,7 +294,7 @@ if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
   if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] \
      && [ -n "${GITHUB_HEAD_REF:-}" ] \
      && [[ "${GITHUB_HEAD_REF}" =~ ^claude-mate/ ]]; then
-    emit_skip_and_exit "PR branch '${GITHUB_HEAD_REF}' is mate-originated — skipping to prevent self-referencing loop."
+    emit_skip_and_exit "self_loop" "PR branch '${GITHUB_HEAD_REF}' is mate-originated — skipping to prevent self-referencing loop."
   fi
 
   # Check 2: HEAD commit is mate-authored (unconditional — self-loop prevention).
@@ -281,7 +304,7 @@ if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
   # Both forms mean "this commit came from a mate's own PR" — skip.
   HEAD_MSG=$(git log -1 --format=%B HEAD 2>/dev/null || echo "")
   if echo "$HEAD_MSG" | grep -qE '\[claude-mate|claude-mate/'; then
-    emit_skip_and_exit "HEAD commit is mate-authored (claude-mate marker in message) — skipping to prevent self-referencing loop."
+    emit_skip_and_exit "self_loop" "HEAD commit is mate-authored (claude-mate marker in message) — skipping to prevent self-referencing loop."
   fi
 
   # Checks 3-4: Release-automation HEAD (skip release / CHANGELOG).
@@ -299,10 +322,10 @@ if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
   # release-automation commit has nothing to review.
   if [ "${GITHUB_EVENT_NAME:-}" != "schedule" ]; then
     if echo "$HEAD_MSG" | grep -qF "[skip release]"; then
-      emit_skip_and_exit "HEAD commit carries [skip release] marker — release-automation commit, nothing for a drift mate to analyze."
+      emit_skip_and_exit "release_automation" "HEAD commit carries [skip release] marker — release-automation commit, nothing for a drift mate to analyze."
     fi
     if echo "$HEAD_MSG" | grep -qE "^docs: Update CHANGELOG for v"; then
-      emit_skip_and_exit "HEAD commit is an auto-generated CHANGELOG update — nothing for a drift mate to analyze."
+      emit_skip_and_exit "release_automation" "HEAD commit is an auto-generated CHANGELOG update — nothing for a drift mate to analyze."
     fi
   fi
 fi
@@ -323,7 +346,7 @@ if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
 
   if [ -n "$LAST_MATE_COMMIT" ] && [ -n "$LAST_USER_COMMIT" ] \
      && git merge-base --is-ancestor "$LAST_USER_COMMIT" "$LAST_MATE_COMMIT"; then
-    emit_skip_and_exit "Last user commit ($LAST_USER_COMMIT) is an ancestor of last ${MATE_NAME} mate commit ($LAST_MATE_COMMIT). No human-authored work since this mate's last contribution."
+    emit_skip_and_exit "no_human_work" "Last user commit ($LAST_USER_COMMIT) is an ancestor of last ${MATE_NAME} mate commit ($LAST_MATE_COMMIT). No human-authored work since this mate's last contribution."
   fi
   echo "Phase 0: Nightly self-loop guard passed — human commits exist since last mate run."
 fi

@@ -170,9 +170,11 @@ run_test() {
 
   case "$expected" in
     skip)
-      # Self-loop guard fired → banner in stdout, outcome=none in $GITHUB_OUTPUT
-      if ! grep -qi "self-loop guard" "$stdout_file"; then
-        fail "$name" "expected self-loop guard to fire, but stdout has no 'self-loop guard' banner" "$stdout_file" "$github_output_file"
+      # Phase 0 skip fired → SKIP banner in stdout, outcome=none in $GITHUB_OUTPUT.
+      # Banner title varies by kind (self_loop / release_automation / no_human_work)
+      # so we match on the common "SKIP —" prefix rather than a specific title.
+      if ! grep -q "SKIP —" "$stdout_file"; then
+        fail "$name" "expected a SKIP banner, but stdout has no 'SKIP —' marker" "$stdout_file" "$github_output_file"
       elif [ -n "$skip_reason_regex" ] && ! grep -qE "$skip_reason_regex" "$stdout_file"; then
         fail "$name" "skip reason didn't match pattern '$skip_reason_regex'" "$stdout_file" "$github_output_file"
       elif ! grep -q "outcome=none" "$github_output_file"; then
@@ -197,8 +199,8 @@ run_test() {
       ;;
     pass)
       # Guard did NOT fire → reached the end-of-Phase-0 marker
-      if grep -qi "self-loop guard" "$stdout_file" && grep -q "exiting cleanly" "$stdout_file"; then
-        fail "$name" "expected guard to pass, but stdout shows a skip" "$stdout_file" "$github_output_file"
+      if grep -q "SKIP —" "$stdout_file" && grep -q "exiting cleanly" "$stdout_file"; then
+        fail "$name" "expected guard to pass, but stdout shows a SKIP banner" "$stdout_file" "$github_output_file"
       elif ! grep -q "Phase 0 complete — exiting in MATE_TEST_MODE=phase0-only" "$stdout_file"; then
         fail "$name" "didn't reach Phase-0-complete marker" "$stdout_file" "$github_output_file"
       else
