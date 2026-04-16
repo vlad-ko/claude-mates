@@ -274,7 +274,7 @@ if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
     emit_skip_and_exit "PR branch '${GITHUB_HEAD_REF}' is mate-originated — skipping to prevent self-referencing loop."
   fi
 
-  # Checks 2-4: HEAD commit message patterns (work on any event).
+  # Check 2: HEAD commit is mate-authored (unconditional — self-loop prevention).
   # The [claude-mate pattern catches squash-merged commits (e.g., PR title
   # "docs: ... [claude-mate:docs]"). The claude-mate/ pattern catches regular
   # merge commits (e.g., "Merge pull request #N from vlad-ko/claude-mate/docs/...").
@@ -283,11 +283,27 @@ if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
   if echo "$HEAD_MSG" | grep -qE '\[claude-mate|claude-mate/'; then
     emit_skip_and_exit "HEAD commit is mate-authored (claude-mate marker in message) — skipping to prevent self-referencing loop."
   fi
-  if echo "$HEAD_MSG" | grep -qF "[skip release]"; then
-    emit_skip_and_exit "HEAD commit carries [skip release] marker — release-automation commit, nothing for a drift mate to analyze."
-  fi
-  if echo "$HEAD_MSG" | grep -qE "^docs: Update CHANGELOG for v"; then
-    emit_skip_and_exit "HEAD commit is an auto-generated CHANGELOG update — nothing for a drift mate to analyze."
+
+  # Checks 3-4: Release-automation HEAD (skip release / CHANGELOG).
+  # On `schedule` events, skip these fast-bail checks and let the smarter
+  # delta guard below (line ~301) handle them. The delta guard's
+  # `--invert-grep` already excludes these patterns and finds the last
+  # human commit underneath. Without this bypass, consumers using
+  # direct-push CHANGELOG (e.g., CHANGELOG committed straight to main
+  # after a release) would have a bot commit as HEAD every morning,
+  # causing all nightly mates to skip even when unreviewed human work
+  # exists. See #93.
+  #
+  # On non-schedule events (push, pull_request), the HEAD check is
+  # correct: the event is for that specific commit, and a
+  # release-automation commit has nothing to review.
+  if [ "${GITHUB_EVENT_NAME:-}" != "schedule" ]; then
+    if echo "$HEAD_MSG" | grep -qF "[skip release]"; then
+      emit_skip_and_exit "HEAD commit carries [skip release] marker — release-automation commit, nothing for a drift mate to analyze."
+    fi
+    if echo "$HEAD_MSG" | grep -qE "^docs: Update CHANGELOG for v"; then
+      emit_skip_and_exit "HEAD commit is an auto-generated CHANGELOG update — nothing for a drift mate to analyze."
+    fi
   fi
 fi
 
