@@ -9,7 +9,6 @@ All notable changes to Claude Mates are documented here.
 
 ### Changed
 - refactor: Distinguish skip kinds in Phase 0 banner (self_loop vs release_automation vs no_human_work)
-- docs: Update CHANGELOG for v0.9.2 [skip release]
 
 **Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.9.2...v0.9.3
 
