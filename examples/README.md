@@ -68,7 +68,7 @@ jobs:
           # to find the last human-authored commit. 100 is a safe default.
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.9.0
+      - uses: vlad-ko/claude-mates@v0.9.3
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -111,7 +111,7 @@ jobs:
         with:
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.9.0
+      - uses: vlad-ko/claude-mates@v0.9.3
         with:
           mate: ${{ matrix.mate }}
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
