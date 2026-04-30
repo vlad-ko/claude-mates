@@ -815,9 +815,16 @@ except Exception as e:
   # CODE-ENFORCED: Detect errors, empty results, and clean runs BEFORE
   # any issue creation. Don't rely on LLM output wording alone.
 
-  # Check for API/CLI errors in the output (including structured CLI error metadata)
-  if echo "$CLAUDE_RESULT" | grep -qiE "rate_limit_error|API Error|overloaded_error|server_error|authentication_error|invalid_api_key|connection_error|timeout" \
-     || echo "$CLAUDE_RESULT" | grep -qE "^\(cli error"; then
+  # Check for API/CLI errors via the structured prefix the JSON parser emits.
+  # Earlier versions also did a case-insensitive keyword grep
+  # ("rate_limit_error|API Error|...|timeout") against the full analysis
+  # text — that was unanchored, so any clean run mentioning a file like
+  # `DockerTimeoutChainTest.php` or a finding description like
+  # "no API error path covered" got misclassified as a CLI error. The
+  # Python parser already emits a canonical `(cli error — stop_reason=...)`
+  # line at the start of $CLAUDE_RESULT for is_error / non-empty errors[]
+  # responses, so anchored matching on that prefix is sufficient and safe.
+  if echo "$CLAUDE_RESULT" | grep -qE "^\(cli error"; then
     CLAUDE_STATUS="error"
     echo "::warning::Claude CLI returned an API error — skipping issue creation"
   # Check for failed/empty output parsing (no result, parse error, max_turns, permission denials)

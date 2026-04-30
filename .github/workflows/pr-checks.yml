@@ -30,6 +30,9 @@ jobs:
       - name: Run Phase 0 integration tests
         run: bash tests/runner_phase0_test.sh
 
+      - name: Run classifier regression tests
+        run: bash tests/runner_classifier_test.sh
+
   yaml-lint:
     runs-on: ubuntu-latest
     steps:
