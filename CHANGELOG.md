@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.9.5] - 2026-04-30
+
+### Fixed
+- fix: Anchor classifier error detection to (cli error prefix; remove false-positive keyword grep
+
+### Changed
+- docs: Update CHANGELOG for v0.9.4 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.9.4...v0.9.5
+
 ## [0.9.4] - 2026-04-30
 
 ### Fixed
