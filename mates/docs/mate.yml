@@ -1,7 +1,7 @@
 name: docs
 description: Documentation quality and staleness reviewer
 model: haiku
-max_turns: 15
+max_turns: 30
 commit_prefix: docs
 schedule: post-merge
 allowed_paths:

@@ -1,7 +1,7 @@
 name: dead-code
 description: Dead code scanner and remover
 model: haiku
-max_turns: 15
+max_turns: 30
 commit_prefix: chore
 schedule: nightly
 allowed_paths:
