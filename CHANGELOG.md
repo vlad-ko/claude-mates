@@ -2,6 +2,16 @@
 
 All notable changes to Claude Mates are documented here.
 
+## [0.9.4] - 2026-04-30
+
+### Fixed
+- fix: Docs Mate verification rule + bump max_turns to 30 on both Mates
+
+### Changed
+- docs: Update CHANGELOG for v0.9.3 [skip release]
+
+**Full Changelog**: https://github.com/vlad-ko/claude-mates/compare/v0.9.3...v0.9.4
+
 ## [0.9.3] - 2026-04-16
 
 ### Fixed
