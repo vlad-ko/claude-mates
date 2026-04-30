@@ -10,7 +10,7 @@ See the repo root [README.md](../README.md) for the `.claude-mates.yml` config s
 2. **Repo setting**: Settings → Actions → General → Workflow permissions → enable *"Allow GitHub Actions to create and approve pull requests"*.
 3. **Config file**: `.claude-mates.yml` in your repo root (enable/disable mates, override models, set scopes, deny rules).
 
-## How mates review work (v0.9.0+) — bounded delta window
+## How mates review work (v0.9.3+) — bounded delta window
 
 Each mate reviews a **bounded delta**, never the whole repo. For every run the framework computes:
 
@@ -68,7 +68,7 @@ jobs:
           # to find the last human-authored commit. 100 is a safe default.
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.9.0
+      - uses: vlad-ko/claude-mates@v0.9.3
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -111,7 +111,7 @@ jobs:
         with:
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.9.0
+      - uses: vlad-ko/claude-mates@v0.9.3
         with:
           mate: ${{ matrix.mate }}
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -183,7 +183,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
-      - uses: vlad-ko/claude-mates@v0.9.0
+      - uses: vlad-ko/claude-mates@v0.9.3
         with:
           mate: security
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -341,7 +341,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 100
-      - uses: vlad-ko/claude-mates@v0.9.0   # or later
+      - uses: vlad-ko/claude-mates@v0.9.3   # or later
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
