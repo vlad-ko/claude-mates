@@ -68,7 +68,7 @@ jobs:
           # to find the last human-authored commit. 100 is a safe default.
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.9.0
+      - uses: vlad-ko/claude-mates@v0.9.5
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -111,7 +111,7 @@ jobs:
         with:
           fetch-depth: 100
 
-      - uses: vlad-ko/claude-mates@v0.9.0
+      - uses: vlad-ko/claude-mates@v0.9.5
         with:
           mate: ${{ matrix.mate }}
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -183,7 +183,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
-      - uses: vlad-ko/claude-mates@v0.9.0
+      - uses: vlad-ko/claude-mates@v0.9.5
         with:
           mate: security
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
@@ -341,7 +341,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 100
-      - uses: vlad-ko/claude-mates@v0.9.0   # or later
+      - uses: vlad-ko/claude-mates@v0.9.5   # or later
         with:
           mate: docs
           api-key: ${{ secrets.CLAUDE_MATES_API_KEY }}
